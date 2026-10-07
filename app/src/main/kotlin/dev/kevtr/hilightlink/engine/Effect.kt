@@ -34,6 +34,8 @@ data class Effect(
     val brightness: Float = 1f,
     /** Leave a dim steady glow after the animation until the notification is dismissed. */
     val hold: Boolean = false,
+    /** Keep repeating one cycle every few seconds until the notification is seen or dismissed. */
+    val blink: Boolean = false,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("style", style.name)
@@ -42,6 +44,7 @@ data class Effect(
         .put("durationMs", durationMs)
         .put("brightness", brightness.toDouble())
         .put("hold", hold)
+        .put("blink", blink)
 
     companion object {
         fun fromJson(o: JSONObject): Effect {
@@ -54,6 +57,7 @@ data class Effect(
                 durationMs = o.optInt("durationMs", 6000),
                 brightness = o.optDouble("brightness", 1.0).toFloat(),
                 hold = o.optBoolean("hold", false),
+                blink = o.optBoolean("blink", false),
             )
         }
     }

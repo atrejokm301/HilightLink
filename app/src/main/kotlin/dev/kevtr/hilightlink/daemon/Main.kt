@@ -68,8 +68,13 @@ object Main {
                     "denied"
                 } else when (req.optString("cmd")) {
                     "ping" -> "ok"
-                    "play" -> { player.play(Effect.fromJson(req.getJSONObject("effect"))); "ok" }
-                    "off" -> { player.off(); "ok" }
+                    "play" -> {
+                        val effect = Effect.fromJson(req.getJSONObject("effect"))
+                        if (req.has("rest")) player.play(effect, effectOf(req, "rest"), setRest = true) else player.play(effect)
+                        "ok"
+                    }
+                    "rest" -> { player.setRest(effectOf(req, "effect")); "ok" }
+                    "off" -> { player.setRest(null); "ok" }
                     "base" -> { player.setBase(frameOf(req)); "ok" }
                     "timer" -> { player.setTimer(req.optLong("endAt"), req.optLong("totalMs"), req.optInt("color")); "ok" }
                     "stream" -> { handedOff = true; "ok" }
@@ -85,6 +90,8 @@ object Main {
             }
         }
     }
+
+    private fun effectOf(req: JSONObject, name: String): Effect? = req.optJSONObject(name)?.let(Effect::fromJson)
 
     /** A "base" request carries either one colour for every LED or a frame with one colour each. */
     private fun frameOf(req: JSONObject): IntArray {
@@ -164,8 +171,29 @@ class Lights {
 }
 
 /**
+ * Kernel wakelock, so patterns keep running while the phone dozes. Always timed, so it cannot
+ * outlive a helper that dies while holding it.
+ */
+private object Wake {
+    private const val NAME = "hilightlinkd"
+    private var held = false
+
+    fun hold(ms: Long) {
+        held = write("/sys/power/wake_lock", "$NAME ${ms * 1_000_000}") || held
+    }
+
+    fun release() {
+        if (held) write("/sys/power/wake_unlock", NAME)
+        held = false
+    }
+
+    private fun write(path: String, text: String) = runCatching { File(path).writeText(text) }.isSuccess
+}
+
+/**
  * Decides what the LEDs show. A playing pattern always wins; otherwise the first of these
  * that is active: timer countdown, live stream (music), hold glow, base (charging light).
+ * A lingering blink replays one cycle of its pattern over those every few seconds.
  */
 class Player(private val lights: Lights) {
     private class Countdown(val endAt: Long, val totalMs: Long, val color: Int)
@@ -173,17 +201,25 @@ class Player(private val lights: Lights) {
     private val shown = IntArray(Renderer.LEDS)
     private val lock = Any()
     private var playing = false
+    private var pulsing = false
     private var base = IntArray(Renderer.LEDS)
-    private var hold: IntArray? = null
+    /** The pattern whose glow or blink lingers once nothing is playing. */
+    private var rest: Effect? = null
+    private var glow: IntArray? = null
+    private var restGeneration = 0
     private var stream: IntArray? = null
     private var streamOwner: Any? = null
     private var timer: Countdown? = null
     @Volatile private var generation = 0
 
-    fun play(effect: Effect) {
+    /** Plays [effect] once. With [setRest], [then] replaces what lingers after it. */
+    fun play(effect: Effect, then: Effect? = null, setRest: Boolean = false) {
         val mine = synchronized(lock) {
+            if (setRest) rest = then
             playing = true
-            hold = null
+            pulsing = false
+            ++restGeneration
+            Wake.hold(effect.durationMs + WAKE_MARGIN_MS)
             ++generation
         }
         Thread {
@@ -202,28 +238,81 @@ class Player(private val lights: Lights) {
             synchronized(lock) {
                 if (generation != mine) return@Thread
                 playing = false
-                if (effect.hold) hold = IntArray(Renderer.LEDS).also { Renderer.holdFrame(effect, it) }
-                showRest()
+                enterRest()
             }
         }.start()
     }
 
-    fun off() = synchronized(lock) {
+    /** Stops any pattern and shows [effect]'s glow or blink; null leaves nothing lingering. */
+    fun setRest(effect: Effect?) = synchronized(lock) {
         ++generation
         playing = false
-        hold = null
-        showRest()
+        rest = effect
+        enterRest()
     }
 
     /** Everything dark, for when the helper is about to exit. */
     fun clear() = synchronized(lock) {
         ++generation
         playing = false
-        hold = null
+        rest = null
         stream = null
         timer = null
         base = IntArray(Renderer.LEDS)
+        enterRest()
+    }
+
+    /** Starts whatever [rest] asks for now that nothing is playing. Call with [lock] held. */
+    private fun enterRest() {
+        val e = rest
+        val mine = ++restGeneration
+        pulsing = false
+        glow = if (e != null && e.hold) IntArray(Renderer.LEDS).also { Renderer.holdFrame(e, it) } else null
+        if (e != null && e.blink) blink(e, mine) else Wake.release()
         showRest()
+    }
+
+    /** Replays one cycle of [e] after every gap until the rest state changes. */
+    private fun blink(e: Effect, mine: Int) {
+        val period = e.periodMs.coerceAtLeast(60).toLong()
+        val awake = BLINK_GAP_MS + period + WAKE_MARGIN_MS
+        Wake.hold(awake)
+        Thread {
+            val frame = IntArray(Renderer.LEDS)
+            var cycle = 0L
+            while (true) {
+                Thread.sleep(BLINK_GAP_MS)
+                val busy = synchronized(lock) {
+                    if (restGeneration != mine) return@Thread
+                    Wake.hold(awake)
+                    timer != null || stream != null
+                }
+                // A countdown or the music visualizer has the LEDs; try again after the next gap.
+                if (busy) continue
+                val start = SystemClock.uptimeMillis()
+                var next = start
+                while (true) {
+                    val t = SystemClock.uptimeMillis() - start
+                    if (t >= period) break
+                    // Carrying on from the last cycle keeps multi-colour patterns rotating.
+                    Renderer.frame(e, cycle * period + t, frame)
+                    synchronized(lock) {
+                        if (restGeneration != mine) return@Thread
+                        pulsing = true
+                        push(frame)
+                    }
+                    next += Lights.FRAME_MS
+                    val wait = next - SystemClock.uptimeMillis()
+                    if (wait > 0) Thread.sleep(wait) else next = SystemClock.uptimeMillis()
+                }
+                cycle++
+                synchronized(lock) {
+                    if (restGeneration != mine) return@Thread
+                    pulsing = false
+                    showRest()
+                }
+            }
+        }.start()
     }
 
     fun setBase(frame: IntArray) = synchronized(lock) {
@@ -274,13 +363,13 @@ class Player(private val lights: Lights) {
     }
 
     private fun showRest() {
-        if (playing) return
+        if (playing || pulsing) return
         val t = timer
         val frame = when {
             t != null -> IntArray(Renderer.LEDS).also {
                 Renderer.meter(t.color, (t.endAt - SystemClock.elapsedRealtime()).toFloat() / t.totalMs, it)
             }
-            else -> stream ?: hold ?: base
+            else -> stream ?: glow ?: base
         }
         push(frame)
     }
@@ -289,5 +378,12 @@ class Player(private val lights: Lights) {
         for (i in frame.indices) {
             if (frame[i] != shown[i] && lights.set(Lights.FIRST_ID + i, frame[i])) shown[i] = frame[i]
         }
+    }
+
+    private companion object {
+        /** Dark time between two cycles of a lingering blink. */
+        const val BLINK_GAP_MS = 4000L
+        /** How much longer than needed the wakelock is asked for, in case a refresh runs late. */
+        const val WAKE_MARGIN_MS = 5000L
     }
 }

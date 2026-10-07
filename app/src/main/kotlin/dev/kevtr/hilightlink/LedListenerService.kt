@@ -1,5 +1,6 @@
 package dev.kevtr.hilightlink
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -17,7 +18,6 @@ import android.service.notification.StatusBarNotification
 /** Turns incoming notifications into light patterns according to the saved rules. */
 class LedListenerService : NotificationListenerService() {
     private val lastPlayed = HashMap<String, Long>()
-    private var holdKey: String? = null
 
     private val battery = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) = Charging.refresh(context, intent)
@@ -25,7 +25,10 @@ class LedListenerService : NotificationListenerService() {
 
     /** Unlocking the phone counts as having seen what was waiting. */
     private val unlocked = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) = Reminders.clear(context)
+        override fun onReceive(context: Context, intent: Intent) {
+            Reminders.clear(context)
+            Waiting.seen(context)
+        }
     }
 
     private val playback = object : AudioManager.AudioPlaybackCallback() {
@@ -59,6 +62,8 @@ class LedListenerService : NotificationListenerService() {
         // Warm the helper up so the first notification after boot is not delayed.
         Thread {
             Leds.ensureRunning(this)
+            // A helper that outlived this process may still show a light nobody is tracking.
+            Waiting.sync(this)
             Charging.refresh(this)
             Music.refresh(this)
             // Pick up a countdown that was already running.
@@ -89,8 +94,10 @@ class LedListenerService : NotificationListenerService() {
         if (last != null && now - last < REPEAT_GUARD_MS) return
         lastPlayed[sbn.key] = now
 
-        Leds.play(this, rule.effect)
-        holdKey = if (rule.effect.hold) sbn.key else null
+        // Like the old notification LED: no blinking for something that arrives while the phone is in use.
+        val inUse = getSystemService(PowerManager::class.java).isInteractive &&
+            !getSystemService(KeyguardManager::class.java).isKeyguardLocked
+        Waiting.post(this, sbn.key, if (inUse) rule.effect.copy(blink = false) else rule.effect)
         Reminders.add(this, sbn.key, rule.effect)
     }
 
@@ -98,10 +105,7 @@ class LedListenerService : NotificationListenerService() {
         lastPlayed.remove(sbn.key)
         Reminders.remove(this, sbn.key)
         TimerLight.unfollow(this, sbn.key)
-        if (sbn.key == holdKey) {
-            holdKey = null
-            Leds.off(this)
-        }
+        Waiting.remove(this, sbn.key)
     }
 
     /**

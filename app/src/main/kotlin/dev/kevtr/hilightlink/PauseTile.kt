@@ -16,6 +16,7 @@ object Control {
     fun apply(context: Context) {
         val app = context.applicationContext
         if (RuleStore.config.value.paused) {
+            Waiting.clear()
             Leds.off(app)
             Reminders.clear(app)
         }
