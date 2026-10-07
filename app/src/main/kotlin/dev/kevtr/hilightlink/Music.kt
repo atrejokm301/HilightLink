@@ -263,7 +263,8 @@ class MusicFrames {
         val shownMs = tMs - switchedMs
         val due = when {
             switchedMs < 0 -> true
-            back || surge -> shownMs > MIN_SHOW_MS
+            back -> shownMs > MIN_SHOW_MS
+            surge -> shownMs > SURGE_MIN_MS
             beat -> beats - beatsAtSwitch >= PHRASE_BEATS && shownMs > PHRASE_MIN_MS
             else -> shownMs > MAX_SHOW_MS
         }
@@ -316,18 +317,20 @@ class MusicFrames {
         const val HUE_STEP = 0.19f
 
         val NEEDS_BEAT = setOf(MusicStyle.CHASE, MusicStyle.BEAT_COLOR)
-        /** Sixteen beats is four bars of most music, the usual length of a phrase. */
-        const val PHRASE_BEATS = 16
+        /** Thirty-two beats is eight bars of most music, about one section of a song. */
+        const val PHRASE_BEATS = 32
         /** Fast music still keeps a style this long, so the changes do not get restless. */
-        const val PHRASE_MIN_MS = 6000L
-        const val MIN_SHOW_MS = 3000L
-        const val MAX_SHOW_MS = 20_000L
+        const val PHRASE_MIN_MS = 20_000L
+        /** A new track may change the style this soon; a surge within a track has to wait longer. */
+        const val MIN_SHOW_MS = 5000L
+        const val SURGE_MIN_MS = 12_000L
+        const val MAX_SHOW_MS = 40_000L
         const val PAUSE_MS = 1200L
         const val BEAT_RECENT_MS = 3000L
         /** How quickly the short and the long loudness averages follow the music, in seconds. */
         const val FAST_S = 0.4f
         const val SLOW_S = 5f
-        const val SURGE_RATIO = 1.5f
+        const val SURGE_RATIO = 1.8f
         const val SURGE_MARGIN = 0.08f
     }
 }
