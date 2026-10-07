@@ -142,9 +142,18 @@ fun MusicScreen(onBack: () -> Unit) {
                 }
             }
 
-            if (music.style.usesColor) {
+            if (music.style != MusicStyle.SPECTRUM) {
                 SectionTitle("Color")
-                Panel { ColorPicker("music", music.color) { change(music.copy(color = it)) } }
+                Group {
+                    GroupRow(
+                        title = "Rainbow",
+                        subtitle = "Spreads the rainbow across the LEDs, like Spectrum",
+                        trailing = { Switch(music.rainbow, onCheckedChange = { change(music.copy(rainbow = it)) }) },
+                    )
+                }
+                if (music.style.usesColor && !music.rainbow) {
+                    Panel { ColorPicker("music", music.color) { change(music.copy(color = it)) } }
+                }
             }
             Spacer(Modifier.height(24.dp))
         }

@@ -171,12 +171,17 @@ class MusicFrames {
         lastMs = tMs
         // The styles that are always lit go dark in silence, so the helper can let go of the LEDs.
         val silent = levels.all { quantize(it) == 0f }
+        fun rainbow(i: Int) = Renderer.hue(i * 0.8f / n)
+        fun color(i: Int) = if (config.rainbow) rainbow(i) else config.color
 
         when (config.style) {
             MusicStyle.SPECTRUM -> for (i in 0 until n) {
-                out[i] = Renderer.scale(Renderer.hue(i * 0.8f / n), quantize(levels[i]) * config.brightness)
+                out[i] = Renderer.scale(rainbow(i), quantize(levels[i]) * config.brightness)
             }
-            MusicStyle.PULSE -> out.fill(Renderer.scale(config.color, quantize(bass) * config.brightness))
+            MusicStyle.PULSE -> {
+                val beat = quantize(bass) * config.brightness
+                for (i in 0 until n) out[i] = Renderer.scale(color(i), beat)
+            }
             MusicStyle.METER -> {
                 val lit = (levels.sum() / n * METER_GAIN).coerceAtMost(1f) * n
                 if (lit >= peak) {
@@ -188,7 +193,7 @@ class MusicFrames {
                 val dot = if (peak > 0.5f) (peak - 0.01f).toInt().coerceAtMost(n - 1) else -1
                 for (i in 0 until n) {
                     // Green at the quiet end through yellow to red at the loud end.
-                    val color = Renderer.hue(0.33f * (1f - i / (n - 1f)))
+                    val color = if (config.rainbow) rainbow(i) else Renderer.hue(0.33f * (1f - i / (n - 1f)))
                     val k = if (i == dot) 1f else quantize((lit - i).coerceIn(0f, 1f))
                     out[i] = Renderer.scale(color, k * config.brightness)
                 }
@@ -197,19 +202,24 @@ class MusicFrames {
                 val reach = quantize(bass) * (n / 2f + 0.5f)
                 for (i in 0 until n) {
                     val distance = abs(i - (n - 1) / 2f)
-                    out[i] = Renderer.scale(config.color, (reach - distance + 0.5f).coerceIn(0f, 1f) * config.brightness)
+                    out[i] = Renderer.scale(color(i), (reach - distance + 0.5f).coerceIn(0f, 1f) * config.brightness)
                 }
             }
             MusicStyle.CHASE -> {
                 val glow = if (silent) 0f else quantize(maxOf(CHASE_FLOOR, bass)) * config.brightness
                 val head = beats % n
                 out.fill(0)
-                out[(head + n - 1) % n] = Renderer.scale(config.color, glow * CHASE_TAIL)
-                out[head] = Renderer.scale(config.color, glow)
+                val tail = (head + n - 1) % n
+                out[tail] = Renderer.scale(color(tail), glow * CHASE_TAIL)
+                out[head] = Renderer.scale(color(head), glow)
             }
             MusicStyle.BEAT_COLOR -> {
                 val glow = if (silent) 0f else quantize(GLOW_FLOOR + (1f - GLOW_FLOOR) * bass) * config.brightness
-                out.fill(Renderer.scale(Renderer.hue(beats * HUE_STEP), glow))
+                // With the rainbow spread out, each beat turns the whole wheel a step further.
+                for (i in 0 until n) {
+                    val hue = beats * HUE_STEP + if (config.rainbow) i * 0.8f / n else 0f
+                    out[i] = Renderer.scale(Renderer.hue(hue), glow)
+                }
             }
         }
     }

@@ -39,6 +39,8 @@ data class MusicConfig(
     val brightness: Float = 0.6f,
     /** 0..1: how readily quiet passages light the LEDs. */
     val sensitivity: Float = 0.5f,
+    /** Spread the rainbow across the LEDs instead of the style's usual colours. */
+    val rainbow: Boolean = false,
 )
 
 data class TimerConfig(
@@ -146,7 +148,8 @@ object RuleStore {
             .put("style", c.music.style.name)
             .put("color", c.music.color)
             .put("brightness", c.music.brightness.toDouble())
-            .put("sensitivity", c.music.sensitivity.toDouble()))
+            .put("sensitivity", c.music.sensitivity.toDouble())
+            .put("rainbow", c.music.rainbow))
         .put("timer", JSONObject()
             .put("color", c.timer.color)
             .put("minutes", c.timer.minutes)
@@ -186,6 +189,7 @@ object RuleStore {
                 color = mu.optInt("color", dm.color),
                 brightness = mu.optDouble("brightness", dm.brightness.toDouble()).toFloat(),
                 sensitivity = mu.optDouble("sensitivity", dm.sensitivity.toDouble()).toFloat(),
+                rainbow = mu.optBoolean("rainbow", dm.rainbow),
             ),
             timer = TimerConfig(
                 color = ti.optInt("color", dt.color),
