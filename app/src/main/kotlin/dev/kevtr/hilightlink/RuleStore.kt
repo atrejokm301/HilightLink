@@ -30,6 +30,12 @@ enum class MusicStyle(val label: String, val about: String, val usesColor: Boole
     BURST("Center burst", "The bass lights the middle and spreads outwards the harder it hits.", true),
     CHASE("Beat chase", "A light that jumps one LED further on every beat.", true),
     BEAT_COLOR("Beat colors", "All LEDs glow together and change colour on every beat.", false),
+    SHUFFLE(
+        "Shuffle",
+        "Moves through all the styles in random order, changing on the beat every few bars and when the music " +
+            "drops or comes back in.",
+        true,
+    ),
 }
 
 data class MusicConfig(

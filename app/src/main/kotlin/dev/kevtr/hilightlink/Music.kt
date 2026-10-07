@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.concurrent.Executors
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.pow
 
@@ -147,8 +148,8 @@ object Music {
 }
 
 /**
- * Turns band levels into LED colours. It remembers the beat count and the meter's peak between
- * frames, so the live lights and the on-screen preview each keep their own.
+ * Turns band levels into LED colours. It remembers the beat count, the meter's peak and where
+ * Shuffle has got to between frames, so the live lights and the on-screen preview each keep their own.
  */
 class MusicFrames {
     private var lastBass = 0f
@@ -158,11 +159,21 @@ class MusicFrames {
     private var peakSetMs = 0L
     private var lastMs = 0L
 
+    // Shuffle.
+    private var current = MusicStyle.SPECTRUM
+    private val bag = ArrayList<MusicStyle>()
+    private var switchedMs = -1L
+    private var beatsAtSwitch = 0
+    private var quietSinceMs = -1L
+    private var energyFast = 0f
+    private var energySlow = 0f
+
     /** [levels] are eight band levels (0..1, bass first); [tMs] is any steadily running clock. */
     fun frame(config: MusicConfig, levels: FloatArray, tMs: Long, out: IntArray) {
         val n = out.size
         val bass = maxOf(levels[0], levels[1])
-        if (bass > BEAT_LEVEL && bass - lastBass > BEAT_RISE && tMs - lastBeatMs > BEAT_GAP_MS) {
+        val beat = bass > BEAT_LEVEL && bass - lastBass > BEAT_RISE && tMs - lastBeatMs > BEAT_GAP_MS
+        if (beat) {
             beats++
             lastBeatMs = tMs
         }
@@ -173,8 +184,11 @@ class MusicFrames {
         val silent = levels.all { quantize(it) == 0f }
         fun rainbow(i: Int) = Renderer.hue(i * 0.8f / n)
         fun color(i: Int) = if (config.rainbow) rainbow(i) else config.color
+        val style = if (config.style == MusicStyle.SHUFFLE) shuffled(levels, tMs, seconds, beat, silent) else config.style
 
-        when (config.style) {
+        when (style) {
+            // Never drawn itself: shuffled() always answers with one of the others.
+            MusicStyle.SHUFFLE -> out.fill(0)
             MusicStyle.SPECTRUM -> for (i in 0 until n) {
                 out[i] = Renderer.scale(rainbow(i), quantize(levels[i]) * config.brightness)
             }
@@ -224,6 +238,61 @@ class MusicFrames {
         }
     }
 
+    /**
+     * The style Shuffle shows right now. It moves on when the music gives it a reason to, so a
+     * change lands on the music instead of cutting across it:
+     *  - on a beat, once a phrase worth of beats has gone by;
+     *  - on a beat where the music suddenly gets louder than it has been (a drop or a chorus);
+     *  - when sound comes back after a pause (the next track);
+     *  - after a fixed time, for music with no beat to count.
+     */
+    private fun shuffled(levels: FloatArray, tMs: Long, seconds: Float, beat: Boolean, silent: Boolean): MusicStyle {
+        val energy = levels.sum() / levels.size
+        // Start both averages level, or the first seconds would look like a surge.
+        if (switchedMs < 0) {
+            energyFast = energy
+            energySlow = energy
+        }
+        energyFast += (energy - energyFast) * (1f - exp(-seconds / FAST_S))
+        energySlow += (energy - energySlow) * (1f - exp(-seconds / SLOW_S))
+        val surge = beat && energyFast > energySlow * SURGE_RATIO + SURGE_MARGIN
+
+        val back = !silent && quietSinceMs >= 0 && tMs - quietSinceMs > PAUSE_MS
+        if (!silent) quietSinceMs = -1L else if (quietSinceMs < 0) quietSinceMs = tMs
+
+        val shownMs = tMs - switchedMs
+        val due = when {
+            switchedMs < 0 -> true
+            back || surge -> shownMs > MIN_SHOW_MS
+            beat -> beats - beatsAtSwitch >= PHRASE_BEATS && shownMs > PHRASE_MIN_MS
+            else -> shownMs > MAX_SHOW_MS
+        }
+        if (due) {
+            current = draw(tMs)
+            switchedMs = tMs
+            beatsAtSwitch = beats
+            // The surge that caused this change must not cause the next one too.
+            energySlow = maxOf(energySlow, energyFast)
+        }
+        return current
+    }
+
+    /**
+     * Next style out of a shuffled bag: every style comes up once before any repeats, and never
+     * the same one twice in a row.
+     */
+    private fun draw(tMs: Long): MusicStyle {
+        if (bag.isEmpty()) {
+            bag += MusicStyle.entries.filter { it != MusicStyle.SHUFFLE }
+            bag.shuffle()
+            if (bag.last() == current) bag.add(0, bag.removeAt(bag.lastIndex))
+        }
+        // Without a beat the styles that only move on one would sit still, so they wait their turn.
+        val steady = tMs - lastBeatMs < BEAT_RECENT_MS
+        val pick = bag.indexOfLast { steady || it !in NEEDS_BEAT }
+        return bag.removeAt(if (pick >= 0) pick else bag.lastIndex)
+    }
+
     /** Fewer brightness steps means fewer LED writes for the helper. */
     private fun quantize(level: Float): Float {
         val q = (level * STEPS).toInt() / STEPS.toFloat()
@@ -245,5 +314,20 @@ class MusicFrames {
         const val GLOW_FLOOR = 0.35f
         /** Far enough round the colour wheel that every beat is a clearly different colour. */
         const val HUE_STEP = 0.19f
+
+        val NEEDS_BEAT = setOf(MusicStyle.CHASE, MusicStyle.BEAT_COLOR)
+        /** Sixteen beats is four bars of most music, the usual length of a phrase. */
+        const val PHRASE_BEATS = 16
+        /** Fast music still keeps a style this long, so the changes do not get restless. */
+        const val PHRASE_MIN_MS = 6000L
+        const val MIN_SHOW_MS = 3000L
+        const val MAX_SHOW_MS = 20_000L
+        const val PAUSE_MS = 1200L
+        const val BEAT_RECENT_MS = 3000L
+        /** How quickly the short and the long loudness averages follow the music, in seconds. */
+        const val FAST_S = 0.4f
+        const val SLOW_S = 5f
+        const val SURGE_RATIO = 1.5f
+        const val SURGE_MARGIN = 0.08f
     }
 }
