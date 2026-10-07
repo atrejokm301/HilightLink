@@ -1,6 +1,5 @@
 package dev.kevtr.hilightlink
 
-import android.app.KeyguardManager
 import android.app.Notification
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -25,10 +24,7 @@ class LedListenerService : NotificationListenerService() {
 
     /** Unlocking the phone counts as having seen what was waiting. */
     private val unlocked = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            Reminders.clear(context)
-            Waiting.seen(context)
-        }
+        override fun onReceive(context: Context, intent: Intent) = Reminders.clear(context)
     }
 
     private val playback = object : AudioManager.AudioPlaybackCallback() {
@@ -94,10 +90,7 @@ class LedListenerService : NotificationListenerService() {
         if (last != null && now - last < REPEAT_GUARD_MS) return
         lastPlayed[sbn.key] = now
 
-        // Like the old notification LED: no blinking for something that arrives while the phone is in use.
-        val inUse = getSystemService(PowerManager::class.java).isInteractive &&
-            !getSystemService(KeyguardManager::class.java).isKeyguardLocked
-        Waiting.post(this, sbn.key, if (inUse) rule.effect.copy(blink = false) else rule.effect)
+        Waiting.post(this, sbn.key, rule.effect)
         Reminders.add(this, sbn.key, rule.effect)
     }
 

@@ -106,7 +106,7 @@ fun EditorScreen(pkg: String, onBack: () -> Unit) {
         ) {
             LedStage(clock, render = effectRenderer(effect))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { Leds.play(context, effect, effect.takeIf { it.hold || it.blink }) }, Modifier.weight(1f).height(56.dp)) {
+                Button(onClick = { Leds.play(context, effect, effect.takeIf { it.hold }) }, Modifier.weight(1f).height(56.dp)) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text("Test on phone")
@@ -181,12 +181,6 @@ fun EditorScreen(pkg: String, onBack: () -> Unit) {
                     title = "Stay lit until dismissed",
                     subtitle = "Leaves a dim glow after the pattern ends",
                     trailing = { Switch(effect.hold, onCheckedChange = { change(effect.copy(hold = it)) }) },
-                )
-                GroupRow(
-                    title = "Keep blinking until seen",
-                    subtitle = "Repeats one cycle every few seconds until you unlock the phone or dismiss the " +
-                        "notification. Keeps the phone awake meanwhile, so it uses more battery",
-                    trailing = { Switch(effect.blink, onCheckedChange = { change(effect.copy(blink = it)) }) },
                 )
             }
             Spacer(Modifier.height(24.dp))

@@ -4,8 +4,8 @@ import android.content.Context
 import dev.kevtr.hilightlink.engine.Effect
 
 /**
- * Notifications whose light lingers (a glow or a blink) until they are dismissed. Like the old
- * notification LED, the newest one shows, and dismissing it brings back the one before.
+ * Notifications whose glow lingers until they are dismissed. Like the old notification LED,
+ * the newest one shows, and dismissing it brings back the one before.
  */
 object Waiting {
     /** By notification key, oldest first. */
@@ -15,7 +15,7 @@ object Waiting {
     @Synchronized
     fun post(context: Context, key: String, effect: Effect) {
         waiting.remove(key)
-        if (effect.hold || effect.blink) waiting[key] = effect
+        if (effect.hold) waiting[key] = effect
         Leds.play(context, effect, waiting.values.lastOrNull())
     }
 
@@ -24,19 +24,6 @@ object Waiting {
         val shown = waiting.keys.lastOrNull() == key
         waiting.remove(key)
         if (shown) Leds.rest(context, waiting.values.lastOrNull())
-    }
-
-    /** The phone was unlocked: blinking has done its job, a steady glow stays until dismissed. */
-    @Synchronized
-    fun seen(context: Context) {
-        var changed = waiting.values.removeAll { it.blink && !it.hold }
-        for (entry in waiting.entries) {
-            if (entry.value.blink) {
-                entry.setValue(entry.value.copy(blink = false))
-                changed = true
-            }
-        }
-        if (changed) Leds.rest(context, waiting.values.lastOrNull())
     }
 
     /** Lights were paused; the caller switches the LEDs off. */

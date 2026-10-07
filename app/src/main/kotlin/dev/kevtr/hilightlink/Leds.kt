@@ -18,11 +18,11 @@ import java.util.concurrent.Executors
 object Leds {
     private val executor = Executors.newSingleThreadExecutor()
 
-    /** Plays [effect] once; whatever was lingering (a glow or a blink) comes back afterwards. */
+    /** Plays [effect] once; a glow that was lingering comes back afterwards. */
     fun play(context: Context, effect: Effect) =
         play(context, effect, JSONObject().put("cmd", "play").put("effect", effect.toJson()))
 
-    /** Plays [effect], then leaves [then]'s glow or blink lingering; null leaves nothing. */
+    /** Plays [effect], then leaves [then]'s glow lingering; null leaves nothing. */
     fun play(context: Context, effect: Effect, then: Effect?) = play(
         context,
         effect,
@@ -36,7 +36,7 @@ object Leds {
         executor.execute { request(app, body) }
     }
 
-    /** Stops any pattern and shows [effect]'s glow or blink straight away; null goes dark. */
+    /** Stops any pattern and shows [effect]'s glow straight away; null goes dark. */
     fun rest(context: Context, effect: Effect?) {
         val app = context.applicationContext
         executor.execute {
