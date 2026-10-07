@@ -5,7 +5,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -32,13 +33,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kevtr.hilightlink.Music
 import dev.kevtr.hilightlink.MusicConfig
+import dev.kevtr.hilightlink.MusicFrames
 import dev.kevtr.hilightlink.MusicStyle
 import dev.kevtr.hilightlink.RuleStore
 import dev.kevtr.hilightlink.engine.Renderer
 import kotlin.math.pow
 import kotlin.math.sin
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun MusicScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -76,9 +78,13 @@ fun MusicScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             val levels = remember { FloatArray(Renderer.LEDS) }
+            val frames = remember { MusicFrames() }
             LedStage(clock) { t, out ->
                 demoLevels(t, levels)
-                Music.frame(music.copy(brightness = 1f), levels, out)
+                // Bend the made-up levels the way the sensitivity setting bends real ones.
+                val bend = Music.curve(music.sensitivity) / Music.curve(MusicConfig().sensitivity)
+                for (i in levels.indices) levels[i] = levels[i].pow(bend)
+                frames.frame(music.copy(brightness = 1f), levels, t, out)
             }
             Group {
                 GroupRow(
@@ -114,7 +120,7 @@ fun MusicScreen(onBack: () -> Unit) {
 
             SectionTitle("Style")
             Panel {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MusicStyle.entries.forEach { style ->
                         FilterChip(
                             selected = music.style == style,
@@ -124,19 +130,19 @@ fun MusicScreen(onBack: () -> Unit) {
                     }
                 }
                 Text(
-                    when (music.style) {
-                        MusicStyle.SPECTRUM -> "Each LED follows one pitch range, bass to treble, in rainbow colours."
-                        MusicStyle.PULSE -> "All LEDs beat together with the bass, in one colour."
-                    },
+                    music.style.about,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 SliderRow("Brightness", "${(music.brightness * 100).toInt()}%", music.brightness, 0.05f..1f) {
                     change(music.copy(brightness = it))
                 }
+                SliderRow("Sensitivity", "${(music.sensitivity * 100).toInt()}%", music.sensitivity, 0f..1f) {
+                    change(music.copy(sensitivity = it))
+                }
             }
 
-            if (music.style == MusicStyle.PULSE) {
+            if (music.style.usesColor) {
                 SectionTitle("Color")
                 Panel { ColorPicker("music", music.color) { change(music.copy(color = it)) } }
             }

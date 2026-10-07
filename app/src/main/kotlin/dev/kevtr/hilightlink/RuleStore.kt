@@ -22,9 +22,14 @@ data class ChargingConfig(
     val lowBattery: Boolean = false,
 )
 
-enum class MusicStyle(val label: String) {
-    SPECTRUM("Spectrum"),
-    PULSE("Pulse"),
+/** [usesColor] is false for the styles that bring their own colours. */
+enum class MusicStyle(val label: String, val about: String, val usesColor: Boolean) {
+    SPECTRUM("Spectrum", "Each LED follows one pitch range, bass to treble, in rainbow colours.", false),
+    PULSE("Pulse", "All LEDs beat together with the bass, in one colour.", true),
+    METER("Level meter", "The LEDs fill up with the loudness, green to red, and a dot marks the last peak.", false),
+    BURST("Center burst", "The bass lights the middle and spreads outwards the harder it hits.", true),
+    CHASE("Beat chase", "A light that jumps one LED further on every beat.", true),
+    BEAT_COLOR("Beat colors", "All LEDs glow together and change colour on every beat.", false),
 }
 
 data class MusicConfig(
@@ -32,6 +37,8 @@ data class MusicConfig(
     val style: MusicStyle = MusicStyle.SPECTRUM,
     val color: Int = 0xFF00B0FF.toInt(),
     val brightness: Float = 0.6f,
+    /** 0..1: how readily quiet passages light the LEDs. */
+    val sensitivity: Float = 0.5f,
 )
 
 data class TimerConfig(
@@ -138,7 +145,8 @@ object RuleStore {
             .put("on", c.music.on)
             .put("style", c.music.style.name)
             .put("color", c.music.color)
-            .put("brightness", c.music.brightness.toDouble()))
+            .put("brightness", c.music.brightness.toDouble())
+            .put("sensitivity", c.music.sensitivity.toDouble()))
         .put("timer", JSONObject()
             .put("color", c.timer.color)
             .put("minutes", c.timer.minutes)
@@ -177,6 +185,7 @@ object RuleStore {
                 style = runCatching { MusicStyle.valueOf(mu.optString("style")) }.getOrDefault(dm.style),
                 color = mu.optInt("color", dm.color),
                 brightness = mu.optDouble("brightness", dm.brightness.toDouble()).toFloat(),
+                sensitivity = mu.optDouble("sensitivity", dm.sensitivity.toDouble()).toFloat(),
             ),
             timer = TimerConfig(
                 color = ti.optInt("color", dt.color),
