@@ -1,0 +1,6 @@
+id=hilightlink
+name=Hilight Link
+version=1
+versionCode=1
+author=kevtr
+description=Starts the Hilight Link root helper at boot so app notifications can drive the Hilight LEDs. Works with Magisk, KernelSU and APatch.
