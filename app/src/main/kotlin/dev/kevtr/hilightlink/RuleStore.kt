@@ -134,7 +134,11 @@ object RuleStore {
     private fun update(change: (Config) -> Config) {
         val next = change(state.value)
         state.value = next
-        file?.writeText(serialize(next).toString())
+        val f = file ?: return
+        // Written beside the real file and swapped in, so a crash half way cannot wipe the rules.
+        val tmp = File(f.path + ".tmp")
+        tmp.writeText(serialize(next).toString())
+        if (!tmp.renameTo(f)) f.writeText(tmp.readText())
     }
 
     private fun serialize(c: Config) = JSONObject()

@@ -53,7 +53,10 @@ object TimerLight {
     /** A notification went away or stopped counting down. */
     @Synchronized
     fun unfollow(context: Context, key: String) {
-        if (state.value?.key == key) cancel(context)
+        val r = state.value?.takeIf { it.key == key } ?: return
+        // As a timer runs out its notification changes or goes away, a moment before or after
+        // the end. That is not a cancel: leave the helper to blink.
+        if (r.endAt - SystemClock.elapsedRealtime() < END_GRACE_MS) state.value = null else cancel(context)
     }
 
     /** Sends the current countdown, or its absence, to the helper. */
@@ -75,4 +78,5 @@ object TimerLight {
     }
 
     private const val FINAL_SLOT = 0
+    private const val END_GRACE_MS = 1500L
 }

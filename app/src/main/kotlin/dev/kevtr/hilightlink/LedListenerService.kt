@@ -13,10 +13,13 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import java.util.concurrent.ConcurrentHashMap
 
 /** Turns incoming notifications into light patterns according to the saved rules. */
 class LedListenerService : NotificationListenerService() {
     private val lastPlayed = HashMap<String, Long>()
+    /** Keys of the notifications that are showing, to tell an update from a new one. */
+    private val showing = ConcurrentHashMap.newKeySet<String>()
 
     private val battery = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) = Charging.refresh(context, intent)
@@ -57,6 +60,8 @@ class LedListenerService : NotificationListenerService() {
     override fun onListenerConnected() {
         // Warm the helper up so the first notification after boot is not delayed.
         Thread {
+            val current = runCatching { activeNotifications }.getOrNull().orEmpty()
+            current.forEach { showing.add(it.key) }
             Leds.ensureRunning(this)
             // A helper that outlived this process may still show a light nobody is tracking.
             Waiting.sync(this)
@@ -64,7 +69,7 @@ class LedListenerService : NotificationListenerService() {
             Music.refresh(this)
             // Pick up a countdown that was already running.
             if (RuleStore.config.value.timer.followClock) {
-                runCatching { activeNotifications }.getOrNull()?.forEach { sbn ->
+                current.forEach { sbn ->
                     countdownEnd(sbn)?.let { TimerLight.follow(this, sbn.key, it) }
                 }
             }
@@ -73,6 +78,7 @@ class LedListenerService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName == packageName) return
+        val update = !showing.add(sbn.key)
         val config = RuleStore.config.value
         if (config.timer.followClock) {
             val end = countdownEnd(sbn)
@@ -81,6 +87,8 @@ class LedListenerService : NotificationListenerService() {
         }
         if (config.paused || sbn.isOngoing) return
         if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
+        // Progress bars, media controls and the like ask to alert only the first time.
+        if (update && sbn.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0) return
         val rule = RuleStore.ruleFor(sbn.packageName) ?: return
         if (config.onlyScreenOff && getSystemService(PowerManager::class.java).isInteractive) return
 
@@ -95,6 +103,7 @@ class LedListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        showing.remove(sbn.key)
         lastPlayed.remove(sbn.key)
         Reminders.remove(this, sbn.key)
         TimerLight.unfollow(this, sbn.key)

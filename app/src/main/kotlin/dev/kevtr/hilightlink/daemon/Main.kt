@@ -124,6 +124,8 @@ object Main {
 /** Raw binder client for android.hardware.light.ILights; the AIDL stubs are not on our classpath. */
 class Lights {
     private var binder: IBinder? = null
+    /** HAL ids of the Hilight LEDs in the order they sit on the phone; null until the HAL was asked. */
+    private var ids: IntArray? = null
 
     private fun service(): IBinder? {
         binder?.let { if (it.isBinderAlive) return it }
@@ -132,9 +134,45 @@ class Lights {
         return binder
     }
 
-    /** ILights.setLightState(id, HwLightState{color, flashMode, flashOnMs, flashOffMs, brightnessMode}). */
-    fun set(id: Int, color: Int): Boolean {
+    /**
+     * ILights.getLights(): the ids of the lights apps may drive, by ordinal. Empty on a phone
+     * without Hilight LEDs, so its other lights are never touched; null if the call failed.
+     */
+    private fun find(b: IBinder): IntArray? {
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            data.writeInterfaceToken(DESCRIPTOR)
+            b.transact(TRANSACTION_GET_LIGHTS, data, reply, 0)
+            reply.readException()
+            val found = ArrayList<Pair<Int, Int>>()
+            repeat(reply.readInt()) {
+                if (reply.readInt() == 0) return@repeat  // null entry
+                // HwLight{id, ordinal, type, ...}, led by its size so newer fields can be skipped.
+                val start = reply.dataPosition()
+                val size = reply.readInt()
+                val id = reply.readInt()
+                val ordinal = reply.readInt()
+                if (reply.readInt() == TYPE_APPLICATION) found += ordinal to id
+                reply.setDataPosition(start + size)
+            }
+            found.sortedBy { it.first }.map { it.second }.toIntArray()
+        } catch (e: Exception) {
+            binder = null
+            null
+        } finally {
+            data.recycle()
+            reply.recycle()
+        }
+    }
+
+    /**
+     * Sets LED [led] (0 is the first) with
+     * ILights.setLightState(id, HwLightState{color, flashMode, flashOnMs, flashOffMs, brightnessMode}).
+     */
+    fun set(led: Int, color: Int): Boolean {
         val b = service() ?: return false
+        val id = (ids ?: find(b)?.also { ids = it })?.getOrNull(led) ?: return false
         val data = Parcel.obtain()
         val reply = Parcel.obtain()
         return try {
@@ -163,8 +201,9 @@ class Lights {
         const val SERVICE = "android.hardware.light.ILights/default"
         const val DESCRIPTOR = "android.hardware.light.ILights"
         const val TRANSACTION_SET_LIGHT_STATE = 1
-        /** Pixel 11 Pro: the eight Hilight LEDs are HAL light ids 1..8, ordinals 0..7. */
-        const val FIRST_ID = 1
+        const val TRANSACTION_GET_LIGHTS = 2
+        /** LightType.APPLICATION. Pixel 11 Pro: the eight Hilight LEDs, HAL ids 1..8, ordinals 0..7. */
+        const val TYPE_APPLICATION = 10
         /** The HAL's MinUpdatePeriod for these lights. */
         const val FRAME_MS = 33L
     }
@@ -326,7 +365,7 @@ class Player(private val lights: Lights) {
 
     private fun push(frame: IntArray) {
         for (i in frame.indices) {
-            if (frame[i] != shown[i] && lights.set(Lights.FIRST_ID + i, frame[i])) shown[i] = frame[i]
+            if (frame[i] != shown[i] && lights.set(i, frame[i])) shown[i] = frame[i]
         }
     }
 
