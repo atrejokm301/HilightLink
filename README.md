@@ -23,7 +23,6 @@ pattern and colours, and the LEDs play it whenever that app notifies you.
 
 - A Pixel 11 Pro. It is the only phone this has been tested on. On a phone without Hilight
   LEDs the app installs but lights nothing.
-- Android 13 or newer.
 - Root: Magisk, KernelSU or APatch. Apps are not allowed to reach the lights service, so a
   small root helper does it for the app.
 
