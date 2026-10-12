@@ -15,16 +15,22 @@ object Control {
     /** Brings the LEDs and the tile in line with the saved settings. */
     fun apply(context: Context) {
         val app = context.applicationContext
-        if (RuleStore.config.value.paused) {
-            Waiting.clear(app)
-            Calls.clear(app)
-            Leds.stopAll(app)
-            Reminders.clear(app)
-        }
-        Quiet.refresh(app)
-        TimerLight.push(app)
+        // The engine inside the system does its part itself, from the settings it is sent.
+        if (Leds.remote(app)) TimerLight.push(app) else lights(app)
         Music.refresh(app)
         TileService.requestListeningState(app, ComponentName(app, PauseTile::class.java))
+    }
+
+    /** Brings the notification, call, charging and timer lights in line with the saved settings. */
+    fun lights(context: Context) {
+        if (RuleStore.config.value.paused) {
+            Waiting.clear(context)
+            Calls.clear(context)
+            Leds.stopAll(context)
+            Reminders.clear(context)
+        }
+        Quiet.refresh(context)
+        TimerLight.push(context)
     }
 }
 

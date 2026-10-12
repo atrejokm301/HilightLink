@@ -52,5 +52,14 @@
         </service>
 
         <receiver android:name=".AlarmReceiver" android:exported="false" />
+
+        <!--
+            Optional: switched on for the System Framework in an Xposed framework (Vector,
+            LSPosed), the app runs the lights from inside the system. See system/Engine.kt.
+        -->
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data android:name="xposeddescription" android:value="@string/xposed_description" />
+        <meta-data android:name="xposedminversion" android:value="93" />
+        <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
     </application>
 </manifest>

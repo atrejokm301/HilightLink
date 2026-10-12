@@ -23,7 +23,8 @@ android {
     buildTypes {
         release {
             // R8 full mode: whole-program optimisation, shrinking and renaming.
-            // proguard-rules.pro keeps the root helper's entry point, which is launched by name.
+            // proguard-rules.pro keeps the entry points that are launched by name: the root
+            // helper's and the two for running inside the system.
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -80,6 +81,8 @@ dependencies {
     implementation(libs.androidx.material3)
     // Installs the bundled baseline profile so the UI is compiled ahead of time.
     implementation(libs.androidx.profileinstaller)
+    // Entry point for running inside the system through an Xposed framework (system/XposedEntry).
+    compileOnly(project(":xposed-stubs"))
 
     testImplementation(libs.junit)
     // The real org.json; the one in the unit-test android.jar is only stubs.

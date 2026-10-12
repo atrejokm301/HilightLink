@@ -81,20 +81,9 @@ object Main {
             val reply = if (token.isEmpty() || req.optString("token") != token) {
                 "denied"
             } else when (req.optString("cmd")) {
-                "ping" -> "ok"
-                "play" -> {
-                    player.play(Effect.fromJson(req.getJSONObject("effect")), req.optInt("level", NOTE))
-                    "ok"
-                }
-                // Without a level, every pattern stops.
-                "stop" -> { player.stop(if (req.has("level")) req.getInt("level") else null); "ok" }
-                "glow" -> { player.setGlow(frameOf(req)); "ok" }
-                "base" -> { player.setBase(frameOf(req)); "ok" }
-                "timer" -> { player.setTimer(req.optLong("endAt"), req.optLong("totalMs"), req.optInt("color")); "ok" }
-                "channels" -> Channels.of(req.optString("pkg"), req.optInt("uid"))
                 "stream" -> { streaming = true; "ok" }
                 "quit" -> { player.clear(); socket.getOutputStream().write("ok\n".toByteArray()); exitProcess(0) }
-                else -> "unknown"
+                else -> player.command(req) ?: "unknown"
             }
             socket.getOutputStream().write("$reply\n".toByteArray())
             if (streaming) stream(socket, reader, player)
@@ -103,12 +92,6 @@ object Main {
         } finally {
             runCatching { socket.close() }
         }
-    }
-
-    /** A frame request carries either one colour for every LED or a frame with one colour each. */
-    private fun frameOf(req: JSONObject): IntArray {
-        val frame = req.optJSONArray("frame") ?: return IntArray(Renderer.LEDS) { req.optInt("color") }
-        return IntArray(Renderer.LEDS) { frame.optInt(it) }
     }
 
     /** Live frames, one comma-separated line each, shown until the app closes the connection. */
@@ -131,8 +114,34 @@ object Main {
 }
 
 /**
+ * Carries out a request that means the same to the root helper and to the engine inside the
+ * system, and gives the reply; null if [req] is not one of those.
+ */
+fun Player.command(req: JSONObject): String? = when (req.optString("cmd")) {
+    "ping" -> "ok"
+    "play" -> {
+        play(Effect.fromJson(req.getJSONObject("effect")), req.optInt("level", Main.NOTE))
+        "ok"
+    }
+    // Without a level, every pattern stops.
+    "stop" -> { stop(if (req.has("level")) req.getInt("level") else null); "ok" }
+    "glow" -> { setGlow(frameOf(req)); "ok" }
+    "base" -> { setBase(frameOf(req)); "ok" }
+    "timer" -> { setTimer(req.optLong("endAt"), req.optLong("totalMs"), req.optInt("color")); "ok" }
+    "channels" -> Channels.of(req.optString("pkg"), req.optInt("uid"))
+    else -> null
+}
+
+/** A frame request carries either one colour for every LED or a frame with one colour each. */
+private fun frameOf(req: JSONObject): IntArray {
+    val frame = req.optJSONArray("frame") ?: return IntArray(Renderer.LEDS) { req.optInt("color") }
+    return IntArray(Renderer.LEDS) { frame.optInt(it) }
+}
+
+/**
  * The notification channels of an app, for rules that cover only one of them. Apps may not
- * list another app's channels, so the helper asks the notification service as root.
+ * list another app's channels, so the helper asks the notification service as root, and the
+ * engine inside the system as the system.
  */
 private object Channels {
     /** One line of JSON, {"channels":[{"id":"…","name":"…"}]}, or "failed". */
@@ -265,19 +274,27 @@ class Lights {
     }
 }
 
+/** Keeps the CPU awake, so a pattern keeps running while the phone dozes. */
+interface Waker {
+    /** Awake for [ms] from now, unless released sooner. */
+    fun hold(ms: Long)
+
+    fun release()
+}
+
 /**
- * Kernel wakelock, so a pattern keeps running while the phone dozes. Always timed, so it cannot
- * outlive a helper that dies while holding it.
+ * Kernel wakelock, for the root helper. Always timed, so it cannot outlive a helper that dies
+ * while holding it.
  */
-private object Wake {
+private object Wake : Waker {
     private const val NAME = "hilightlinkd"
     private var held = false
 
-    fun hold(ms: Long) {
+    override fun hold(ms: Long) {
         held = write("/sys/power/wake_lock", "$NAME ${ms * 1_000_000}") || held
     }
 
-    fun release() {
+    override fun release() {
         if (held) write("/sys/power/wake_unlock", NAME)
         held = false
     }
@@ -297,7 +314,7 @@ private object Wake {
  * A pattern that a higher one covers keeps its place in time, and shows for whatever is left
  * of it once the higher one ends.
  */
-class Player(private val lights: Lights) {
+class Player(private val lights: Lights, private val wake: Waker = Wake) {
     private class Countdown(val endAt: Long, val totalMs: Long, val color: Int)
 
     /** A pattern running since [start] (uptimeMillis) for as long as its effect lasts. */
@@ -321,7 +338,7 @@ class Player(private val lights: Lights) {
         synchronized(lock) {
             val now = SystemClock.uptimeMillis()
             shots[level.coerceIn(0, shots.lastIndex)] = Shot(effect, now)
-            Wake.hold(shots.maxOf { if (it == null) 0L else it.start + it.effect.durationMs - now } + WAKE_MARGIN_MS)
+            wake.hold(shots.maxOf { if (it == null) 0L else it.start + it.effect.durationMs - now } + WAKE_MARGIN_MS)
             if (animating) return
             animating = true
         }
@@ -338,7 +355,7 @@ class Player(private val lights: Lights) {
                 val shot = top(now)
                 if (shot == null) {
                     animating = false
-                    Wake.release()
+                    wake.release()
                     push(still())
                     return
                 }

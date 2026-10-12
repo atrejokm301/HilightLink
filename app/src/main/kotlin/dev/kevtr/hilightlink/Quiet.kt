@@ -36,6 +36,8 @@ object Quiet {
 
     /** Brings the lights in line with the time of day and the settings. */
     fun refresh(context: Context) {
+        // The engine inside the system does this itself, from the settings it is sent.
+        if (Leds.remote(context)) return
         Waiting.show(context)
         Charging.refresh(context)
         schedule(context)

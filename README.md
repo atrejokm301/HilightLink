@@ -75,6 +75,25 @@ When more than one light wants the LEDs, the helper shows the first of these tha
 a ringing call, a timer that ran out or a low battery warning, a notification pattern, the
 timer countdown, the music visualizer, the glow of waiting notifications, the charging light.
 
+### Inside the system (optional, experimental)
+
+With an Xposed framework installed (Vector, LSPosed), switch Hilight Link on there for
+**System Framework** and reboot. The lights then run from inside the system process:
+
+```
+notification -> system listener -> Engine -> lights HAL
+```
+
+In there the system hands over every notification without notification access, the lights
+HAL can be reached without the root helper, and nothing puts the process to sleep. Nothing is
+hooked. The app stays where the settings are made: it finds the engine (`system/Engine.kt`),
+sends it the settings, and leaves the notification, call, charging and timer lights to it.
+The home screen shows "In the system" in place of "Root helper" when this is on.
+
+The engine is loaded from the installed APK and again after every update of the app, so an
+update takes no reboot. To keep it from loading, run `setprop persist.sys.hilightlink.off 1`
+as root, or switch the app off in the Xposed framework, and reboot.
+
 ## Build
 
 Needs JDK 17, the Android SDK and Python.

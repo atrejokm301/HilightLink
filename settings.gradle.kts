@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "HilightLink"
 include(":app")
+include(":xposed-stubs")

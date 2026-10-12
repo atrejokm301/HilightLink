@@ -141,6 +141,7 @@ fun MainScreen(tab: Tab, onTab: (Tab) -> Unit, onOpen: (String) -> Unit) {
     LifecycleResumeEffect(Unit) {
         access = listenerEnabled(context)
         Music.refresh(context)
+        TimerLight.push(context)
         scope.launch { helper = withContext(Dispatchers.IO) { Leds.ensureRunning(context) } }
         onPauseOrDispose { }
     }
@@ -242,15 +243,17 @@ private fun HomeTab(
 ) {
     val context = LocalContext.current
     val clock = rememberClock()
+    // The engine inside the system sees the notifications itself and needs no helper.
+    val inSystem = remember(helper) { Leds.remote(context) }
     SectionList(padding) {
         item { LedStage(clock, render = effectRenderer(SHOWCASE)) }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatusPill("Notifications", access)
-                StatusPill("Root helper", helper)
+                StatusPill("Notifications", access || inSystem)
+                StatusPill(if (inSystem) "In the system" else "Root helper", helper)
             }
         }
-        if (!access) {
+        if (!access && !inSystem) {
             item {
                 Notice(
                     text = "Hilight Link needs notification access to see when your apps notify you.",
@@ -430,6 +433,7 @@ private fun SettingsMenu(
     onOpen: (String) -> Unit,
 ) {
     val context = LocalContext.current
+    val inSystem = remember(helper) { Leds.remote(context) }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         val saved = runCatching {
@@ -518,7 +522,7 @@ private fun SettingsMenu(
                 GroupRow(
                     title = "Root helper",
                     subtitle = when (helper) {
-                        true -> "Running. Tap to restart"
+                        true -> if (inSystem) "Not needed: the lights run inside the system" else "Running. Tap to restart"
                         false -> "Not running. Tap to start"
                         null -> "Checking…"
                     },

@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">Hilight Link</string>
     <string name="tile_label">Hilight lights</string>
+    <string name="xposed_description">Optional. Switch on for System Framework to run the lights from inside the system: no notification access, no root helper.</string>
+    <string-array name="xposed_scope">
+        <item>android</item>
+        <item>system</item>
+    </string-array>
 </resources>

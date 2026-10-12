@@ -25,6 +25,8 @@ object Charging {
      * [battery] is set when this is a real battery broadcast rather than a settings change.
      */
     fun refresh(context: Context, battery: Intent? = null) {
+        // The engine inside the system watches the battery itself.
+        if (Leds.remote(context)) return
         val intent = battery
             ?: context.applicationContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val config = RuleStore.config.value

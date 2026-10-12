@@ -5,6 +5,7 @@ import android.os.SystemClock
 import dev.kevtr.hilightlink.engine.Renderer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import org.json.JSONObject
 import kotlin.math.abs
 
 /** Countdown shown on the LEDs: they drain as the time runs out, then blink. */
@@ -18,6 +19,10 @@ object TimerLight {
     @Synchronized
     fun start(context: Context, totalMs: Long, key: String? = null, endAt: Long = SystemClock.elapsedRealtime() + totalMs) {
         state.value = Running(endAt, totalMs, key)
+        if (Leds.remote(context)) {
+            // The engine inside the system keeps the countdown, and its alarms, from here.
+            return Leds.engine(context, JSONObject().put("cmd", "timerStart").put("totalMs", totalMs).put("endAt", endAt))
+        }
         push(context)
         // Wake the phone each time an LED goes out so the helper can redraw, and once at the end.
         val now = SystemClock.elapsedRealtime()
@@ -31,6 +36,7 @@ object TimerLight {
     @Synchronized
     fun cancel(context: Context) {
         state.value = null
+        if (Leds.remote(context)) return Leds.engine(context, JSONObject().put("cmd", "timerCancel"))
         push(context)
         for (slot in 0 until Renderer.LEDS) Alarms.cancel(context, Alarms.TIMER, slot)
     }
@@ -59,8 +65,16 @@ object TimerLight {
         if (r.endAt - SystemClock.elapsedRealtime() < END_GRACE_MS) state.value = null else cancel(context)
     }
 
-    /** Sends the current countdown, or its absence, to the helper. */
+    /**
+     * Sends the current countdown, or its absence, to the helper. With an engine inside the
+     * system the countdown is the engine's, so this asks it instead which one is running.
+     */
     fun push(context: Context) {
+        if (Leds.remote(context)) {
+            return Leds.engine(context, JSONObject().put("cmd", "timerState")) { reply ->
+                if (reply != null) state.value = runCatching { fromJson(JSONObject(reply)) }.getOrNull()
+            }
+        }
         val config = RuleStore.config.value
         val r = state.value
         if (r == null || config.paused || r.endAt <= SystemClock.elapsedRealtime()) {
@@ -76,6 +90,15 @@ object TimerLight {
         Leds.wake(context, if (final) 9000 else 2500)
         if (final) state.value = null
     }
+
+    /** The running countdown as the engine tells it to the app; "none" without one. */
+    fun stateJson(): String {
+        val r = state.value ?: return "none"
+        return JSONObject().put("endAt", r.endAt).put("totalMs", r.totalMs).putOpt("key", r.key).toString()
+    }
+
+    private fun fromJson(o: JSONObject) =
+        Running(o.getLong("endAt"), o.getLong("totalMs"), o.optString("key").ifEmpty { null })
 
     private const val FINAL_SLOT = 0
     private const val END_GRACE_MS = 1500L

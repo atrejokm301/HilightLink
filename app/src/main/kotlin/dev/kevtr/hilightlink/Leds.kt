@@ -3,6 +3,8 @@ package dev.kevtr.hilightlink
 import android.content.Context
 import android.os.PowerManager
 import dev.kevtr.hilightlink.daemon.Main
+import dev.kevtr.hilightlink.daemon.Player
+import dev.kevtr.hilightlink.daemon.command
 import dev.kevtr.hilightlink.engine.Effect
 import org.json.JSONArray
 import org.json.JSONObject
@@ -14,9 +16,19 @@ import java.net.Socket
 import java.security.SecureRandom
 import java.util.concurrent.Executors
 
-/** App-side handle on the root helper. All calls are queued on one background thread. */
+/**
+ * Handle on whatever drives the LEDs. That is the engine inside the system when there is one
+ * (see [Bridge]), and the root helper otherwise. All calls are queued on one background thread.
+ */
 object Leds {
     private val executor = Executors.newSingleThreadExecutor()
+
+    /** Set where this code is the engine inside the system: requests go straight to its player. */
+    @Volatile
+    var local: Player? = null
+
+    /** Whether the engine inside the system runs the lights, rather than this process. */
+    fun remote(context: Context): Boolean = local == null && Bridge.binder(context) != null
 
     /**
      * Plays [effect] once at [level]: [Main.NOTE] for a notification, [Main.ALERT] and
@@ -24,8 +36,8 @@ object Leds {
      */
     fun play(context: Context, effect: Effect, level: Int = Main.NOTE) {
         val app = context.applicationContext
-        // Keep the CPU awake until the helper has the request; it holds its own wakelock from there.
-        wake(app, minOf(effect.durationMs + 3000L, MAX_WAKE_MS))
+        // Keep the CPU awake until the request is delivered; the player holds its own wakelock from there.
+        if (local == null) wake(app, minOf(effect.durationMs + 3000L, MAX_WAKE_MS))
         executor.execute {
             request(app, JSONObject().put("cmd", "play").put("effect", effect.toJson()).put("level", level))
         }
@@ -67,7 +79,21 @@ object Leds {
         }
     }
 
-    /** Holds the CPU awake for [ms] so the helper can update the LEDs with the screen off. */
+    /** Hands the engine inside the system the settings it is to work from. Nothing without one. */
+    fun config(context: Context, json: String) {
+        val app = context.applicationContext
+        executor.execute {
+            if (remote(app)) Bridge.ask(app, JSONObject().put("cmd", "config").put("config", json))
+        }
+    }
+
+    /** Sends the engine inside the system a request of its own; [then] gets the reply, or null without one. */
+    fun engine(context: Context, body: JSONObject, then: (String?) -> Unit = {}) {
+        val app = context.applicationContext
+        executor.execute { then(Bridge.ask(app, body)) }
+    }
+
+    /** Holds the CPU awake for [ms] so the LEDs can be updated with the screen off. */
     fun wake(context: Context, ms: Long) {
         context.applicationContext.getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hilightlink:play")
@@ -75,12 +101,18 @@ object Leds {
     }
 
     /** Live frames over one open connection, for the music visualizer. Not thread safe. */
-    class Stream internal constructor(private val socket: Socket) {
+    interface Stream {
+        /** False once the other end has gone away. */
+        fun write(frame: IntArray): Boolean
+
+        fun close()
+    }
+
+    private class SocketStream(private val socket: Socket) : Stream {
         private val out: OutputStream = socket.getOutputStream()
         private val line = StringBuilder(96)
 
-        /** False once the helper has gone away. */
-        fun write(frame: IntArray): Boolean = try {
+        override fun write(frame: IntArray): Boolean = try {
             line.setLength(0)
             for (i in frame.indices) {
                 if (i > 0) line.append(',')
@@ -93,29 +125,33 @@ object Leds {
             false
         }
 
-        fun close() {
+        override fun close() {
             runCatching { socket.close() }
         }
     }
 
-    /** Opens a live stream, or null if the helper does not answer. Blocking. */
-    fun openStream(context: Context): Stream? = try {
-        val socket = Socket()
-        socket.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), Main.PORT), 500)
-        socket.soTimeout = 2000
-        socket.tcpNoDelay = true
-        val body = JSONObject().put("cmd", "stream").put("token", token(context.applicationContext))
-        socket.getOutputStream().write("$body\n".toByteArray())
-        if (socket.getInputStream().bufferedReader().readLine() == "ok") Stream(socket) else { socket.close(); null }
-    } catch (e: Exception) {
-        null
+    /** Opens a live stream, or null if nothing answers. Blocking. */
+    fun openStream(context: Context): Stream? {
+        val app = context.applicationContext
+        if (remote(app)) return Bridge.openStream(app)
+        return try {
+            val socket = Socket()
+            socket.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), Main.PORT), 500)
+            socket.soTimeout = 2000
+            socket.tcpNoDelay = true
+            val body = JSONObject().put("cmd", "stream").put("token", token(app))
+            socket.getOutputStream().write("$body\n".toByteArray())
+            if (socket.getInputStream().bufferedReader().readLine() == "ok") SocketStream(socket) else { socket.close(); null }
+        } catch (e: Exception) {
+            null
+        }
     }
 
-    /** True if the helper answers, starting it through su first if needed. Blocking. */
+    /** True if the lights are being run, starting the helper through su first if needed. Blocking. */
     fun ensureRunning(context: Context): Boolean =
         request(context.applicationContext, JSONObject().put("cmd", "ping"))
 
-    /** True if the helper answers right now. Blocking. */
+    /** True if the lights are being run right now. Blocking. */
     fun isRunning(context: Context): Boolean =
         request(context.applicationContext, JSONObject().put("cmd", "ping"), startIfDown = false)
 
@@ -130,7 +166,7 @@ object Leds {
     /** A notification channel of some app: its id and the name the app gave it. */
     data class Channel(val id: String, val name: String)
 
-    /** The notification channels of [pkg], or null if the helper could not tell. Blocking. */
+    /** The notification channels of [pkg], or null if they could not be listed. Blocking. */
     fun channels(context: Context, pkg: String): List<Channel>? = runCatching {
         val app = context.applicationContext
         val uid = app.packageManager.getApplicationInfo(pkg, 0).uid
@@ -139,11 +175,18 @@ object Leds {
         (0 until list.length()).map { list.getJSONObject(it).run { Channel(getString("id"), getString("name")) } }
     }.getOrNull()
 
+    /** The engine is being unloaded: let its thread go. */
+    fun close() {
+        executor.shutdown()
+    }
+
     private fun request(context: Context, body: JSONObject, startIfDown: Boolean = true): Boolean =
         ask(context, body, startIfDown) == "ok"
 
-    /** The helper's reply to [body], or null if it never answered. */
+    /** The reply to [body], or null if nothing answered. */
     private fun ask(context: Context, body: JSONObject, startIfDown: Boolean): String? {
+        local?.let { return it.command(body) }
+        Bridge.ask(context, body)?.let { return it }
         body.put("token", token(context))
         send(body)?.let { return it }
         if (!startIfDown || !startHelper(context)) return null
@@ -154,7 +197,7 @@ object Leds {
         return null
     }
 
-    /** One request line, one reply line. Null when nothing is listening. */
+    /** One request line to the helper, one reply line. Null when nothing is listening. */
     private fun send(body: JSONObject): String? = try {
         Socket().use { s ->
             s.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), Main.PORT), 500)

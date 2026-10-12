@@ -131,12 +131,32 @@ object RuleStore {
 
     val config: StateFlow<Config> get() = state
 
+    /** Told the settings, as JSON text, after every change. */
+    @Volatile
+    private var onChange: ((String) -> Unit)? = null
+
     @Synchronized
     fun init(context: Context) {
-        if (file != null) return
-        val f = File(context.applicationContext.filesDir, "rules.json")
+        val app = context.applicationContext
+        if (!open(File(app.filesDir, "rules.json"))) return
+        // The engine inside the system, if there is one, works from a copy that it is sent.
+        onChange = { Leds.config(app, it) }
+        Leds.config(app, serialize(state.value).toString())
+    }
+
+    /** For the engine inside the system: its copy of the settings lives in [dir]. */
+    @Synchronized
+    fun init(dir: File) {
+        dir.mkdirs()
+        open(File(dir, "rules.json"))
+    }
+
+    /** False if the settings were loaded before. */
+    private fun open(f: File): Boolean {
+        if (file != null) return false
         file = f
         if (f.exists()) runCatching { state.value = parse(JSONObject(f.readText())) }
+        return true
     }
 
     /**
@@ -211,8 +231,10 @@ object RuleStore {
         val f = file ?: return
         // Written beside the real file and swapped in, so a crash half way cannot wipe the rules.
         val tmp = File(f.path + ".tmp")
-        tmp.writeText(serialize(next).toString())
-        if (!tmp.renameTo(f)) f.writeText(tmp.readText())
+        val text = serialize(next).toString()
+        tmp.writeText(text)
+        if (!tmp.renameTo(f)) f.writeText(text)
+        onChange?.invoke(text)
     }
 
     private fun serialize(c: Config) = JSONObject()
