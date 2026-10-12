@@ -29,6 +29,14 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
         debug { isMinifyEnabled = false }
+        // Release without renaming, used only to record which code runs on a real phone
+        // (see profile.sh). Its recording becomes src/main/baseline-prof.txt.
+        create("profiling") {
+            initWith(getByName("release"))
+            isMinifyEnabled = false
+            isShrinkResources = false
+            matchingFallbacks += "release"
+        }
     }
 
     compileOptions {
