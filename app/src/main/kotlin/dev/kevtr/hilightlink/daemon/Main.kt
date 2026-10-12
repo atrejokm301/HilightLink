@@ -1,11 +1,14 @@
 package dev.kevtr.hilightlink.daemon
 
+import android.app.NotificationChannel
+import android.app.NotificationChannelGroup
 import android.os.IBinder
 import android.os.Parcel
 import android.os.SystemClock
 import dev.kevtr.hilightlink.engine.Effect
 import dev.kevtr.hilightlink.engine.Renderer
 import dev.kevtr.hilightlink.engine.Style
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
@@ -22,6 +25,11 @@ import kotlin.system.exitProcess
 object Main {
     const val PORT = 48211
     const val EXIT_PORT_BUSY = 3
+
+    /** Levels a pattern can play at; a higher one shows over a lower one. */
+    const val NOTE = 0
+    const val ALERT = 1
+    const val CALL = 2
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -57,43 +65,47 @@ object Main {
                 player.clear()
                 exitProcess(0)
             }
-            var handedOff = false
-            try {
-                socket.soTimeout = 2000
-                val reader = socket.getInputStream().bufferedReader()
-                val line = reader.readLine() ?: continue
-                val req = JSONObject(line)
-                val token = runCatching { tokenFile.readText().trim() }.getOrDefault("")
-                val reply = if (token.isEmpty() || req.optString("token") != token) {
-                    "denied"
-                } else when (req.optString("cmd")) {
-                    "ping" -> "ok"
-                    "play" -> {
-                        val effect = Effect.fromJson(req.getJSONObject("effect"))
-                        if (req.has("rest")) player.play(effect, effectOf(req, "rest"), setRest = true) else player.play(effect)
-                        "ok"
-                    }
-                    "rest" -> { player.setRest(effectOf(req, "effect")); "ok" }
-                    "off" -> { player.setRest(null); "ok" }
-                    "base" -> { player.setBase(frameOf(req)); "ok" }
-                    "timer" -> { player.setTimer(req.optLong("endAt"), req.optLong("totalMs"), req.optInt("color")); "ok" }
-                    "stream" -> { handedOff = true; "ok" }
-                    "quit" -> { player.clear(); socket.getOutputStream().write("ok\n".toByteArray()); exitProcess(0) }
-                    else -> "unknown"
-                }
-                socket.getOutputStream().write("$reply\n".toByteArray())
-                if (handedOff) stream(socket, reader, player)
-            } catch (e: Exception) {
-                System.err.println("hilightlinkd: $e")
-            } finally {
-                if (!handedOff) runCatching { socket.close() }
-            }
+            // A thread each, so a client that connects and says nothing cannot hold up the others.
+            Thread { serve(socket, tokenFile, player) }.start()
         }
     }
 
-    private fun effectOf(req: JSONObject, name: String): Effect? = req.optJSONObject(name)?.let(Effect::fromJson)
+    private fun serve(socket: Socket, tokenFile: File, player: Player) {
+        try {
+            socket.soTimeout = 2000
+            val reader = socket.getInputStream().bufferedReader()
+            val line = reader.readLine() ?: return
+            val req = JSONObject(line)
+            val token = runCatching { tokenFile.readText().trim() }.getOrDefault("")
+            var streaming = false
+            val reply = if (token.isEmpty() || req.optString("token") != token) {
+                "denied"
+            } else when (req.optString("cmd")) {
+                "ping" -> "ok"
+                "play" -> {
+                    player.play(Effect.fromJson(req.getJSONObject("effect")), req.optInt("level", NOTE))
+                    "ok"
+                }
+                // Without a level, every pattern stops.
+                "stop" -> { player.stop(if (req.has("level")) req.getInt("level") else null); "ok" }
+                "glow" -> { player.setGlow(frameOf(req)); "ok" }
+                "base" -> { player.setBase(frameOf(req)); "ok" }
+                "timer" -> { player.setTimer(req.optLong("endAt"), req.optLong("totalMs"), req.optInt("color")); "ok" }
+                "channels" -> Channels.of(req.optString("pkg"), req.optInt("uid"))
+                "stream" -> { streaming = true; "ok" }
+                "quit" -> { player.clear(); socket.getOutputStream().write("ok\n".toByteArray()); exitProcess(0) }
+                else -> "unknown"
+            }
+            socket.getOutputStream().write("$reply\n".toByteArray())
+            if (streaming) stream(socket, reader, player)
+        } catch (e: Exception) {
+            System.err.println("hilightlinkd: $e")
+        } finally {
+            runCatching { socket.close() }
+        }
+    }
 
-    /** A "base" request carries either one colour for every LED or a frame with one colour each. */
+    /** A frame request carries either one colour for every LED or a frame with one colour each. */
     private fun frameOf(req: JSONObject): IntArray {
         val frame = req.optJSONArray("frame") ?: return IntArray(Renderer.LEDS) { req.optInt("color") }
         return IntArray(Renderer.LEDS) { frame.optInt(it) }
@@ -101,23 +113,67 @@ object Main {
 
     /** Live frames, one comma-separated line each, shown until the app closes the connection. */
     private fun stream(socket: Socket, reader: BufferedReader, player: Player) {
-        Thread {
-            val frame = IntArray(Renderer.LEDS)
-            try {
-                socket.soTimeout = 4000
-                while (true) {
-                    val line = reader.readLine() ?: break
-                    val parts = line.split(',')
-                    for (i in frame.indices) frame[i] = parts.getOrNull(i)?.toIntOrNull() ?: 0
-                    player.setStream(socket, frame)
-                }
-            } catch (e: Exception) {
-                // Timed out or dropped: fall through and release the LEDs.
-            } finally {
-                player.endStream(socket)
-                runCatching { socket.close() }
+        val frame = IntArray(Renderer.LEDS)
+        try {
+            socket.soTimeout = 4000
+            while (true) {
+                val line = reader.readLine() ?: break
+                val parts = line.split(',')
+                for (i in frame.indices) frame[i] = parts.getOrNull(i)?.toIntOrNull() ?: 0
+                player.setStream(socket, frame)
             }
-        }.start()
+        } catch (e: Exception) {
+            // Timed out or dropped: fall through and release the LEDs.
+        } finally {
+            player.endStream(socket)
+        }
+    }
+}
+
+/**
+ * The notification channels of an app, for rules that cover only one of them. Apps may not
+ * list another app's channels, so the helper asks the notification service as root.
+ */
+private object Channels {
+    /** One line of JSON, {"channels":[{"id":"…","name":"…"}]}, or "failed". */
+    fun of(pkg: String, uid: Int): String = try {
+        val sm = Class.forName("android.os.ServiceManager")
+        val binder = sm.getMethod("getService", String::class.java).invoke(null, "notification") as IBinder
+        val nm = Class.forName("android.app.INotificationManager\$Stub")
+            .getMethod("asInterface", IBinder::class.java).invoke(null, binder)!!
+        // Apps such as Gmail give every account a channel with the same name, told apart only by
+        // the group it is in, so the group's name goes with it.
+        val groups = runCatching {
+            list(nm, "getNotificationChannelGroupsForPackage", pkg, uid)
+                .filterIsInstance<NotificationChannelGroup>().associate { it.id to it.name?.toString() }
+        }.getOrDefault(emptyMap())
+        val out = JSONArray()
+        list(nm, "getNotificationChannelsForPackage", pkg, uid).filterIsInstance<NotificationChannel>().forEach {
+            val name = it.name?.toString() ?: it.id
+            val group = groups[it.group]
+            out.put(JSONObject().put("id", it.id).put("name", if (group.isNullOrBlank()) name else "$name ($group)"))
+        }
+        JSONObject().put("channels", out).toString()
+    } catch (e: Exception) {
+        System.err.println("hilightlinkd: channels: $e")
+        "failed"
+    }
+
+    /**
+     * Calls a notification service method that takes (String pkg, int uid, boolean includeDeleted)
+     * and answers with a list. The arguments are filled in by type in case their order changes.
+     */
+    private fun list(nm: Any, name: String, pkg: String, uid: Int): List<*> {
+        val method = nm.javaClass.methods.first { it.name == name }
+        val args = method.parameterTypes.map { type ->
+            when (type) {
+                String::class.java -> pkg
+                Int::class.javaPrimitiveType -> uid
+                else -> false
+            }
+        }
+        val slice = method.invoke(nm, *args.toTypedArray())!!
+        return slice.javaClass.getMethod("getList").invoke(slice) as List<*>
     }
 }
 
@@ -230,96 +286,108 @@ private object Wake {
 }
 
 /**
- * Decides what the LEDs show. A playing pattern always wins; otherwise the first of these
- * that is active: timer countdown, live stream (music), hold glow, base (charging light).
+ * Decides what the LEDs show: the first of these that is active.
+ *  1. a ringing call
+ *  2. an alert (a timer that ran out, low battery)
+ *  3. a notification pattern
+ *  4. the timer countdown
+ *  5. the live stream (music)
+ *  6. the glow of notifications that are waiting
+ *  7. the base (charging light)
+ * A pattern that a higher one covers keeps its place in time, and shows for whatever is left
+ * of it once the higher one ends.
  */
 class Player(private val lights: Lights) {
     private class Countdown(val endAt: Long, val totalMs: Long, val color: Int)
 
+    /** A pattern running since [start] (uptimeMillis) for as long as its effect lasts. */
+    private class Shot(val effect: Effect, val start: Long) {
+        fun over(now: Long) = now - start >= effect.durationMs
+    }
+
     private val shown = IntArray(Renderer.LEDS)
     private val lock = Any()
-    private var playing = false
+    /** The pattern at each level, [Main.NOTE] to [Main.CALL]. */
+    private val shots = arrayOfNulls<Shot>(3)
+    private var animating = false
     private var base = IntArray(Renderer.LEDS)
-    /** The pattern whose glow lingers once nothing is playing. */
-    private var rest: Effect? = null
-    private var glow: IntArray? = null
+    private var glow = IntArray(Renderer.LEDS)
     private var stream: IntArray? = null
     private var streamOwner: Any? = null
     private var timer: Countdown? = null
-    @Volatile private var generation = 0
 
-    /** Plays [effect] once. With [setRest], [then] replaces what lingers after it. */
-    fun play(effect: Effect, then: Effect? = null, setRest: Boolean = false) {
-        val mine = synchronized(lock) {
-            if (setRest) rest = then
-            playing = true
-            Wake.hold(effect.durationMs + WAKE_MARGIN_MS)
-            ++generation
+    /** Plays [effect] at [level], in place of what was playing there. */
+    fun play(effect: Effect, level: Int = Main.NOTE) {
+        synchronized(lock) {
+            val now = SystemClock.uptimeMillis()
+            shots[level.coerceIn(0, shots.lastIndex)] = Shot(effect, now)
+            Wake.hold(shots.maxOf { if (it == null) 0L else it.start + it.effect.durationMs - now } + WAKE_MARGIN_MS)
+            if (animating) return
+            animating = true
         }
-        Thread {
-            val frame = IntArray(Renderer.LEDS)
-            val start = SystemClock.uptimeMillis()
-            var next = start
-            while (generation == mine) {
-                val t = SystemClock.uptimeMillis() - start
-                if (t >= effect.durationMs) break
-                Renderer.frame(effect, t, frame)
-                synchronized(lock) { if (generation == mine) push(frame) }
-                next += Lights.FRAME_MS
-                val wait = next - SystemClock.uptimeMillis()
-                if (wait > 0) Thread.sleep(wait) else next = SystemClock.uptimeMillis()
-            }
-            synchronized(lock) {
-                if (generation != mine) return@Thread
-                playing = false
-                enterRest()
-            }
-        }.start()
+        Thread(::animate).start()
     }
 
-    /** Stops any pattern and shows [effect]'s glow; null leaves nothing lingering. */
-    fun setRest(effect: Effect?) = synchronized(lock) {
-        ++generation
-        playing = false
-        rest = effect
-        enterRest()
+    /** Draws the highest pattern frame by frame until none is left. */
+    private fun animate() {
+        val frame = IntArray(Renderer.LEDS)
+        var next = SystemClock.uptimeMillis()
+        while (true) {
+            synchronized(lock) {
+                val now = SystemClock.uptimeMillis()
+                val shot = top(now)
+                if (shot == null) {
+                    animating = false
+                    Wake.release()
+                    push(still())
+                    return
+                }
+                Renderer.frame(shot.effect, now - shot.start, frame)
+                push(frame)
+            }
+            next += Lights.FRAME_MS
+            val wait = next - SystemClock.uptimeMillis()
+            if (wait > 0) Thread.sleep(wait) else next = SystemClock.uptimeMillis()
+        }
+    }
+
+    /** Cuts the pattern at [level] short; null stops them all. */
+    fun stop(level: Int?) = synchronized(lock) {
+        if (level == null) shots.fill(null) else if (level in shots.indices) shots[level] = null
+        show()
     }
 
     /** Everything dark, for when the helper is about to exit. */
     fun clear() = synchronized(lock) {
-        ++generation
-        playing = false
-        rest = null
+        shots.fill(null)
         stream = null
         timer = null
+        glow = IntArray(Renderer.LEDS)
         base = IntArray(Renderer.LEDS)
-        enterRest()
+        show()
     }
 
-    /** Shows what lingers now that nothing is playing. Call with [lock] held. */
-    private fun enterRest() {
-        val e = rest
-        glow = if (e != null && e.hold) IntArray(Renderer.LEDS).also { Renderer.holdFrame(e, it) } else null
-        Wake.release()
-        showRest()
+    fun setGlow(frame: IntArray) = synchronized(lock) {
+        glow = frame
+        show()
     }
 
     fun setBase(frame: IntArray) = synchronized(lock) {
         base = frame
-        showRest()
+        show()
     }
 
     fun setStream(owner: Any, frame: IntArray) = synchronized(lock) {
         streamOwner = owner
         stream = frame.copyOf()
-        showRest()
+        show()
     }
 
     fun endStream(owner: Any) = synchronized(lock) {
         if (streamOwner !== owner) return@synchronized
         streamOwner = null
         stream = null
-        showRest()
+        show()
     }
 
     /** Drains the LEDs until [endAt] (elapsedRealtime), then blinks. A zero [totalMs] cancels. */
@@ -327,7 +395,7 @@ class Player(private val lights: Lights) {
         val mine = if (totalMs > 0) Countdown(endAt, totalMs, color) else null
         synchronized(lock) {
             timer = mine
-            showRest()
+            show()
         }
         if (mine == null) return
         Thread {
@@ -339,28 +407,41 @@ class Player(private val lights: Lights) {
                         timer = null
                         true
                     } else {
-                        showRest()
+                        show()
                         false
                     }
                 }
                 if (finished) {
-                    play(Effect(Style.BLINK, listOf(mine.color), periodMs = 500, durationMs = 6000))
+                    play(Effect(Style.BLINK, listOf(mine.color), periodMs = 500, durationMs = 6000), Main.ALERT)
                     return@Thread
                 }
             }
         }.start()
     }
 
-    private fun showRest() {
-        if (playing) return
+    /** The highest pattern that is still running. Call with [lock] held. */
+    private fun top(now: Long): Shot? {
+        for (level in shots.indices.reversed()) {
+            val shot = shots[level] ?: continue
+            if (shot.over(now)) shots[level] = null else return shot
+        }
+        return null
+    }
+
+    /** What shows while no pattern is playing. Call with [lock] held. */
+    private fun still(): IntArray {
         val t = timer
-        val frame = when {
-            t != null -> IntArray(Renderer.LEDS).also {
+        if (t != null) {
+            return IntArray(Renderer.LEDS).also {
                 Renderer.meter(t.color, (t.endAt - SystemClock.elapsedRealtime()).toFloat() / t.totalMs, it)
             }
-            else -> stream ?: glow ?: base
         }
-        push(frame)
+        return stream ?: glow.takeIf { frame -> frame.any { it != 0 } } ?: base
+    }
+
+    /** Redraws after a change, unless a pattern is playing over it. Call with [lock] held. */
+    private fun show() {
+        if (top(SystemClock.uptimeMillis()) == null) push(still())
     }
 
     private fun push(frame: IntArray) {
@@ -370,7 +451,7 @@ class Player(private val lights: Lights) {
     }
 
     private companion object {
-        /** How much longer than the pattern the wakelock is asked for, in case it runs late. */
+        /** How much longer than the patterns the wakelock is asked for, in case they run late. */
         const val WAKE_MARGIN_MS = 5000L
     }
 }

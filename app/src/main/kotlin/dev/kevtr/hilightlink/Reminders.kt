@@ -34,8 +34,11 @@ object Reminders {
         val config = RuleStore.config.value
         val effect = pending.values.lastOrNull() ?: return
         if (config.reminderMinutes <= 0 || config.paused) return
-        // With the screen on the user is already looking; try again next time.
-        if (!context.getSystemService(PowerManager::class.java).isInteractive) Leds.play(context, effect)
+        val level = Quiet.level()
+        // With the screen on the user is already looking, and quiet hours may want it dark; try again next time.
+        if (level > 0f && !context.getSystemService(PowerManager::class.java).isInteractive) {
+            Leds.play(context, effect.copy(brightness = effect.brightness * level))
+        }
         schedule(context)
     }
 

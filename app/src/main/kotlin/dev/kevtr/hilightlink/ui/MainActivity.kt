@@ -44,6 +44,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
@@ -120,7 +121,9 @@ class MainActivity : ComponentActivity() {
                         CHARGING_SCREEN -> ChargingScreen(onBack = { screen = null })
                         MUSIC_SCREEN -> MusicScreen(onBack = { screen = null })
                         TIMER_SCREEN -> TimerScreen(onBack = { screen = null })
-                        else -> EditorScreen(pkg = target, onBack = { screen = null })
+                        CALL_SCREEN -> CallScreen(onBack = { screen = null })
+                        QUIET_SCREEN -> QuietScreen(onBack = { screen = null })
+                        else -> EditorScreen(id = target, onBack = { screen = null }, onOpen = { screen = it })
                     }
                 }
             }
@@ -132,6 +135,8 @@ class MainActivity : ComponentActivity() {
 const val CHARGING_SCREEN = "#charging"
 const val MUSIC_SCREEN = "#music"
 const val TIMER_SCREEN = "#timer"
+const val CALL_SCREEN = "#call"
+const val QUIET_SCREEN = "#quiet"
 
 /** Minutes between replays of a missed notification; 0 is off. */
 private val REMINDER_CHOICES = listOf(0, 1, 2, 5, 10, 15, 30)
@@ -264,6 +269,13 @@ private fun HomeScreen(onOpen: (String) -> Unit) {
                         trailing = { Switch(config.paused, onCheckedChange = { Control.setPaused(context, it) }) },
                     )
                     GroupRow(
+                        title = "Incoming calls",
+                        subtitle = if (config.call.on) "${config.call.effect.style.label}, until you answer" else "Off",
+                        onClick = { onOpen(CALL_SCREEN) },
+                        leading = { IconBadge(Icons.Default.Call) },
+                        trailing = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
+                    )
+                    GroupRow(
                         title = "Charging light",
                         subtitle = when {
                             config.charging.chargingOn && config.charging.chargedOn -> "While charging and when charged"
@@ -295,6 +307,17 @@ private fun HomeScreen(onOpen: (String) -> Unit) {
                     )
                     ReminderRow(config.reminderMinutes)
                     GroupRow(
+                        title = "Quiet hours",
+                        subtitle = when {
+                            config.quiet.on -> "${formatMinute(config.quiet.startMinute)} to ${formatMinute(config.quiet.endMinute)}"
+                            config.respectDnd -> "Off. Dark in Do Not Disturb"
+                            else -> "Off"
+                        },
+                        onClick = { onOpen(QUIET_SCREEN) },
+                        leading = { IconBadge(MoonIcon) },
+                        trailing = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
+                    )
+                    GroupRow(
                         title = "Only when the screen is off",
                         subtitle = "Skip patterns while you are using the phone",
                         leading = { IconBadge(Icons.Default.Lock) },
@@ -306,7 +329,7 @@ private fun HomeScreen(onOpen: (String) -> Unit) {
             item { SectionTitle("Apps") }
             item {
                 val default = config.rules.firstOrNull { it.pkg == RuleStore.DEFAULT_PKG }
-                val apps = config.rules.filter { it.pkg != RuleStore.DEFAULT_PKG }
+                val apps = apps(config.rules)
                 Group {
                     RuleRow(
                         pkg = RuleStore.DEFAULT_PKG,
@@ -316,10 +339,16 @@ private fun HomeScreen(onOpen: (String) -> Unit) {
                             onOpen(RuleStore.DEFAULT_PKG)
                         },
                     )
-                    apps.forEach { rule -> RuleRow(pkg = rule.pkg, rule = rule, onClick = { onOpen(rule.pkg) }) }
+                    // Each app, then its rules for single channels and contacts.
+                    apps.forEach { app ->
+                        RuleRow(pkg = app.pkg, rule = app, onClick = { onOpen(app.id) })
+                        config.rules.filter { it.scoped && it.pkg == app.pkg }.forEach { part ->
+                            RuleRow(pkg = part.pkg, rule = part, onClick = { onOpen(part.id) })
+                        }
+                    }
                 }
             }
-            if (config.rules.none { it.pkg != RuleStore.DEFAULT_PKG }) {
+            if (apps(config.rules).isEmpty()) {
                 item {
                     Text(
                         "No apps linked yet. Tap Add app to give one its own light pattern.",
@@ -353,7 +382,7 @@ private fun HomeScreen(onOpen: (String) -> Unit) {
 
     if (picking) {
         AppPicker(
-            exclude = config.rules.map { it.pkg }.toSet(),
+            exclude = apps(config.rules).map { it.pkg }.toSet(),
             onDismiss = { picking = false },
             onPick = { pkg ->
                 picking = false
@@ -365,6 +394,9 @@ private fun HomeScreen(onOpen: (String) -> Unit) {
         )
     }
 }
+
+/** The rules that stand for a whole app. */
+private fun apps(rules: List<Rule>) = rules.filter { it.pkg != RuleStore.DEFAULT_PKG && !it.scoped }
 
 @Composable
 private fun ReminderRow(minutes: Int) {
@@ -425,6 +457,7 @@ private fun RuleRow(pkg: String, rule: Rule?, onClick: () -> Unit) {
         title = remember(pkg) { appLabel(context, pkg) },
         subtitle = when {
             rule == null -> "Not set"
+            rule.scoped -> "${scopeLabel(rule)}: ${if (rule.enabled) rule.effect.style.label else "kept dark"}"
             !rule.enabled -> "Off"
             else -> rule.effect.style.label
         },

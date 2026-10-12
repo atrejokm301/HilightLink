@@ -16,11 +16,12 @@ object Control {
     fun apply(context: Context) {
         val app = context.applicationContext
         if (RuleStore.config.value.paused) {
-            Waiting.clear()
-            Leds.off(app)
+            Waiting.clear(app)
+            Calls.clear(app)
+            Leds.stopAll(app)
             Reminders.clear(app)
         }
-        Charging.refresh(app)
+        Quiet.refresh(app)
         TimerLight.push(app)
         Music.refresh(app)
         TileService.requestListeningState(app, ComponentName(app, PauseTile::class.java))

@@ -118,10 +118,16 @@ object Renderer {
         }
     }
 
-    /** The steady glow left behind when [Effect.hold] is on. */
-    fun holdFrame(e: Effect, out: IntArray) {
-        val c = scale(e.colors.firstOrNull() ?: 0xFFFFFFFF.toInt(), e.brightness * HOLD_BRIGHTNESS)
-        out.fill(c)
+    /** The colour of the steady glow left behind when [Effect.hold] is on. */
+    fun holdColor(e: Effect): Int = scale(e.colors.firstOrNull() ?: 0xFFFFFFFF.toInt(), e.brightness * HOLD_BRIGHTNESS)
+
+    /**
+     * Shares the LEDs out between [colors], in order and as evenly as they divide. With more
+     * colours than LEDs the last ones are shown; with none the LEDs go dark.
+     */
+    fun segments(colors: List<Int>, out: IntArray) {
+        val shown = colors.takeLast(LEDS)
+        for (i in out.indices) out[i] = if (shown.isEmpty()) 0 else shown[i * shown.size / out.size]
     }
 
     /** A bar that is full at [fraction] 1 and empties towards the first LED, the last lit one fading. */

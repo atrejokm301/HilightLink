@@ -55,6 +55,7 @@ android {
 
     sourceSets {
         named("main") { kotlin.srcDir("src/main/kotlin") }
+        named("test") { kotlin.srcDir("src/test/kotlin") }
     }
 }
 
@@ -69,4 +70,8 @@ dependencies {
     implementation(libs.androidx.material3)
     // Installs the bundled baseline profile so the UI is compiled ahead of time.
     implementation(libs.androidx.profileinstaller)
+
+    testImplementation(libs.junit)
+    // The real org.json; the one in the unit-test android.jar is only stubs.
+    testImplementation(libs.json)
 }

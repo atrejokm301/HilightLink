@@ -18,47 +18,40 @@ import java.util.concurrent.Executors
 object Leds {
     private val executor = Executors.newSingleThreadExecutor()
 
-    /** Plays [effect] once; a glow that was lingering comes back afterwards. */
-    fun play(context: Context, effect: Effect) =
-        play(context, effect, JSONObject().put("cmd", "play").put("effect", effect.toJson()))
-
-    /** Plays [effect], then leaves [then]'s glow lingering; null leaves nothing. */
-    fun play(context: Context, effect: Effect, then: Effect?) = play(
-        context,
-        effect,
-        JSONObject().put("cmd", "play").put("effect", effect.toJson()).put("rest", then?.toJson() ?: JSONObject.NULL),
-    )
-
-    private fun play(context: Context, effect: Effect, body: JSONObject) {
+    /**
+     * Plays [effect] once at [level]: [Main.NOTE] for a notification, [Main.ALERT] and
+     * [Main.CALL] for what must show over one.
+     */
+    fun play(context: Context, effect: Effect, level: Int = Main.NOTE) {
         val app = context.applicationContext
-        // Keep the CPU awake while the helper animates; the steady hold glow needs no CPU.
-        wake(app, effect.durationMs + 3000L)
-        executor.execute { request(app, body) }
-    }
-
-    /** Stops any pattern and shows [effect]'s glow straight away; null goes dark. */
-    fun rest(context: Context, effect: Effect?) {
-        val app = context.applicationContext
+        // Keep the CPU awake until the helper has the request; it holds its own wakelock from there.
+        wake(app, minOf(effect.durationMs + 3000L, MAX_WAKE_MS))
         executor.execute {
-            request(
-                app,
-                JSONObject().put("cmd", "rest").put("effect", effect?.toJson() ?: JSONObject.NULL),
-                startIfDown = effect != null,
-            )
+            request(app, JSONObject().put("cmd", "play").put("effect", effect.toJson()).put("level", level))
         }
     }
 
-    fun off(context: Context) = rest(context, null)
+    /** Cuts the pattern at [level] short. */
+    fun stop(context: Context, level: Int = Main.NOTE) = stop(context, JSONObject().put("cmd", "stop").put("level", level))
+
+    /** Cuts every pattern short. */
+    fun stopAll(context: Context) = stop(context, JSONObject().put("cmd", "stop"))
+
+    private fun stop(context: Context, body: JSONObject) {
+        val app = context.applicationContext
+        executor.execute { request(app, body, startIfDown = false) }
+    }
+
+    /** Sets the glow of the notifications that are waiting, one colour per LED; all zeros is none. */
+    fun glow(context: Context, frame: IntArray) = frame(context, "glow", frame)
 
     /** Sets what each LED shows whenever nothing else is active; all zeros turns it off. */
-    fun base(context: Context, frame: IntArray) {
+    fun base(context: Context, frame: IntArray) = frame(context, "base", frame)
+
+    private fun frame(context: Context, cmd: String, frame: IntArray) {
         val app = context.applicationContext
         executor.execute {
-            request(
-                app,
-                JSONObject().put("cmd", "base").put("frame", JSONArray(frame)),
-                startIfDown = frame.any { it != 0 },
-            )
+            request(app, JSONObject().put("cmd", cmd).put("frame", JSONArray(frame)), startIfDown = frame.any { it != 0 })
         }
     }
 
@@ -134,15 +127,31 @@ object Leds {
         return ensureRunning(app)
     }
 
-    private fun request(context: Context, body: JSONObject, startIfDown: Boolean = true): Boolean {
+    /** A notification channel of some app: its id and the name the app gave it. */
+    data class Channel(val id: String, val name: String)
+
+    /** The notification channels of [pkg], or null if the helper could not tell. Blocking. */
+    fun channels(context: Context, pkg: String): List<Channel>? = runCatching {
+        val app = context.applicationContext
+        val uid = app.packageManager.getApplicationInfo(pkg, 0).uid
+        val reply = ask(app, JSONObject().put("cmd", "channels").put("pkg", pkg).put("uid", uid), startIfDown = true)
+        val list = JSONObject(reply!!).getJSONArray("channels")
+        (0 until list.length()).map { list.getJSONObject(it).run { Channel(getString("id"), getString("name")) } }
+    }.getOrNull()
+
+    private fun request(context: Context, body: JSONObject, startIfDown: Boolean = true): Boolean =
+        ask(context, body, startIfDown) == "ok"
+
+    /** The helper's reply to [body], or null if it never answered. */
+    private fun ask(context: Context, body: JSONObject, startIfDown: Boolean): String? {
         body.put("token", token(context))
-        send(body)?.let { return it == "ok" }
-        if (!startIfDown || !startHelper(context)) return false
+        send(body)?.let { return it }
+        if (!startIfDown || !startHelper(context)) return null
         repeat(20) {
             Thread.sleep(250)
-            send(body)?.let { return it == "ok" }
+            send(body)?.let { return it }
         }
-        return false
+        return null
     }
 
     /** One request line, one reply line. Null when nothing is listening. */
@@ -177,4 +186,6 @@ object Leds {
         }
         return file.readText().trim()
     }
+
+    private const val MAX_WAKE_MS = 65_000L
 }

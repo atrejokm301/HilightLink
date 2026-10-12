@@ -30,6 +30,11 @@ class LedListenerService : NotificationListenerService() {
         override fun onReceive(context: Context, intent: Intent) = Reminders.clear(context)
     }
 
+    /** The clock or the time zone was changed, which moves quiet hours. */
+    private val clockSet = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = Quiet.refresh(context)
+    }
+
     private val playback = object : AudioManager.AudioPlaybackCallback() {
         override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>) {
             Music.playing = configs.any {
@@ -47,12 +52,15 @@ class LedListenerService : NotificationListenerService() {
         // Sticky broadcast: delivers the current battery state straight away.
         registerReceiver(battery, IntentFilter(Intent.ACTION_BATTERY_CHANGED), RECEIVER_NOT_EXPORTED)
         registerReceiver(unlocked, IntentFilter(Intent.ACTION_USER_PRESENT), RECEIVER_NOT_EXPORTED)
+        val clock = IntentFilter(Intent.ACTION_TIME_CHANGED).apply { addAction(Intent.ACTION_TIMEZONE_CHANGED) }
+        registerReceiver(clockSet, clock, RECEIVER_NOT_EXPORTED)
         getSystemService(AudioManager::class.java).registerAudioPlaybackCallback(playback, null)
     }
 
     override fun onDestroy() {
         unregisterReceiver(battery)
         unregisterReceiver(unlocked)
+        unregisterReceiver(clockSet)
         getSystemService(AudioManager::class.java).unregisterAudioPlaybackCallback(playback)
         super.onDestroy()
     }
@@ -64,9 +72,10 @@ class LedListenerService : NotificationListenerService() {
             current.forEach { showing.add(it.key) }
             Leds.ensureRunning(this)
             // A helper that outlived this process may still show a light nobody is tracking.
-            Waiting.sync(this)
-            Charging.refresh(this)
+            Calls.clear(this)
+            Quiet.refresh(this)
             Music.refresh(this)
+            current.filter(Calls::isRinging).forEach(::ring)
             // Pick up a countdown that was already running.
             if (RuleStore.config.value.timer.followClock) {
                 current.forEach { sbn ->
@@ -85,11 +94,16 @@ class LedListenerService : NotificationListenerService() {
             if (end != null) return TimerLight.follow(this, sbn.key, end)
             TimerLight.unfollow(this, sbn.key)
         }
+        if (sbn.notification.category == Notification.CATEGORY_CALL) {
+            // The same notification stays up once the call is answered, no longer ringing.
+            if (Calls.isRinging(sbn)) ring(sbn) else Calls.end(this, sbn.key)
+        }
         if (config.paused || sbn.isOngoing) return
         if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
         // Progress bars, media controls and the like ask to alert only the first time.
         if (update && sbn.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0) return
-        val rule = RuleStore.ruleFor(sbn.packageName) ?: return
+        val rule = RuleStore.ruleFor(sbn.packageName, sbn.notification.channelId) { titleOf(sbn) } ?: return
+        if (silenced(sbn)) return
         if (config.onlyScreenOff && getSystemService(PowerManager::class.java).isInteractive) return
 
         // Apps often post the same notification several times in a burst.
@@ -107,7 +121,29 @@ class LedListenerService : NotificationListenerService() {
         lastPlayed.remove(sbn.key)
         Reminders.remove(this, sbn.key)
         TimerLight.unfollow(this, sbn.key)
+        Calls.end(this, sbn.key)
         Waiting.remove(this, sbn.key)
+    }
+
+    private fun ring(sbn: StatusBarNotification) {
+        if (!silenced(sbn)) Calls.ring(this, sbn.key)
+    }
+
+    /** Whether Do Not Disturb is holding this notification back, and the lights should respect that. */
+    private fun silenced(sbn: StatusBarNotification): Boolean {
+        if (!RuleStore.config.value.respectDnd) return false
+        val ranking = Ranking()
+        return runCatching { currentRanking.getRanking(sbn.key, ranking) && !ranking.matchesInterruptionFilter() }
+            .getOrDefault(false)
+    }
+
+    /** Who or what the notification is from: its title and, for a group chat, the name of the group. */
+    private fun titleOf(sbn: StatusBarNotification): String {
+        val extras = sbn.notification.extras ?: return ""
+        return listOfNotNull(
+            extras.getCharSequence(Notification.EXTRA_TITLE),
+            extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE),
+        ).joinToString("\n")
     }
 
     /**

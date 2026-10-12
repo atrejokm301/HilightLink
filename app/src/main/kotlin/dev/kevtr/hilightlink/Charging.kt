@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import dev.kevtr.hilightlink.daemon.Main
 import dev.kevtr.hilightlink.engine.Effect
 import dev.kevtr.hilightlink.engine.Renderer
 import dev.kevtr.hilightlink.engine.Style
@@ -28,13 +29,17 @@ object Charging {
             ?: context.applicationContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val config = RuleStore.config.value
         val out = IntArray(Renderer.LEDS)
-        if (intent != null && !config.paused) {
+        val level = Quiet.level()
+        if (intent != null && !config.paused && level > 0f) {
             val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
             val percent = percent(intent)
             val full = intent.getIntExtra(BatteryManager.EXTRA_STATUS, 0) == BatteryManager.BATTERY_STATUS_FULL ||
                 percent >= 100
-            if (plugged) frame(config.charging, percent / 100f, full, out)
-            if (battery != null) warn(context, config.charging, plugged, percent)
+            if (plugged) {
+                frame(config.charging, percent / 100f, full, out)
+                for (i in out.indices) out[i] = Renderer.scale(out[i], level)
+            }
+            if (battery != null) warn(context, config.charging, plugged, percent, level)
         }
         Leds.base(context, out)
     }
@@ -56,10 +61,12 @@ object Charging {
         return level * 100 / scale
     }
 
-    private fun warn(context: Context, c: ChargingConfig, plugged: Boolean, percent: Int) {
+    private fun warn(context: Context, c: ChargingConfig, plugged: Boolean, percent: Int, level: Float) {
         val before = lastPercent
         lastPercent = percent
         if (!c.lowBattery || plugged || before < 0) return
-        if (LOW_LEVELS.any { before > it && percent <= it }) Leds.play(context, LOW_BATTERY)
+        if (LOW_LEVELS.any { before > it && percent <= it }) {
+            Leds.play(context, LOW_BATTERY.copy(brightness = level), Main.ALERT)
+        }
     }
 }

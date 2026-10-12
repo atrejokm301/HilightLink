@@ -2,13 +2,61 @@ package dev.kevtr.hilightlink
 
 import android.content.Context
 import dev.kevtr.hilightlink.engine.Effect
+import dev.kevtr.hilightlink.engine.Style
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.UUID
 
-data class Rule(val pkg: String, val enabled: Boolean = true, val effect: Effect = Effect())
+/**
+ * A light pattern for an app's notifications. A rule with a [channel] or a [title] covers only
+ * that part of them and goes before the app's own rule; switched off, it keeps that part dark.
+ */
+data class Rule(
+    val pkg: String,
+    val enabled: Boolean = true,
+    val effect: Effect = Effect(),
+    /** Only this notification channel of the app; null is any. */
+    val channel: String? = null,
+    /** The channel's name as the app shows it, for display. */
+    val channelName: String? = null,
+    /** Only notifications whose title contains this, such as a contact or a group; null is any. */
+    val title: String? = null,
+    /** The app's own rule goes by its package name; the narrower ones each get an id of their own. */
+    val id: String = pkg,
+) {
+    /** Covers part of the app's notifications rather than all of them. */
+    val scoped: Boolean get() = id != pkg
+
+    /** Narrower rules go first: a name beats a channel, and both together beat either. */
+    val reach: Int get() = (if (title.isNullOrBlank()) 0 else 2) + (if (channel == null) 0 else 1)
+
+    fun fits(channel: String?, title: () -> String): Boolean {
+        // A narrow rule that has not been told what to look for yet matches nothing.
+        if (scoped && reach == 0) return false
+        if (this.channel != null && this.channel != channel) return false
+        return this.title.isNullOrBlank() || title().contains(this.title.trim(), ignoreCase = true)
+    }
+}
+
+data class CallConfig(
+    val on: Boolean = false,
+    /** Loops while the phone rings, so its length is not used. */
+    val effect: Effect = Effect(Style.CHASE, listOf(0xFF00E676.toInt()), periodMs = 900),
+)
+
+data class QuietConfig(
+    val on: Boolean = false,
+    /** Minutes after midnight. An end before the start runs through the night. */
+    val startMinute: Int = 22 * 60,
+    val endMinute: Int = 7 * 60,
+    /** Play at low brightness during quiet hours instead of staying dark. */
+    val dim: Boolean = false,
+    /** A ringing call lights up as usual during quiet hours. */
+    val calls: Boolean = true,
+)
 
 data class ChargingConfig(
     val chargingOn: Boolean = false,
@@ -67,6 +115,10 @@ data class Config(
     val paused: Boolean = false,
     val music: MusicConfig = MusicConfig(),
     val timer: TimerConfig = TimerConfig(),
+    val call: CallConfig = CallConfig(),
+    val quiet: QuietConfig = QuietConfig(),
+    /** Light nothing for a notification that Do Not Disturb is silencing. */
+    val respectDnd: Boolean = true,
 )
 
 /** Process-wide rules, persisted as one JSON file. */
@@ -87,22 +139,38 @@ object RuleStore {
         if (f.exists()) runCatching { state.value = parse(JSONObject(f.readText())) }
     }
 
-    fun ruleFor(pkg: String): Rule? {
+    /**
+     * The rule for a notification from [pkg] on [channel]. [title] is only asked for when one
+     * of the app's rules looks at titles.
+     */
+    fun ruleFor(pkg: String, channel: String? = null, title: () -> String = { "" }): Rule? {
         val rules = state.value.rules
-        val own = rules.firstOrNull { it.pkg == pkg }
+        val text by lazy(title)
+        // The narrowest rule that fits decides, even when it is off: that is how one chat is kept dark.
+        val own = rules.filter { it.pkg == pkg && it.fits(channel) { text } }.maxByOrNull { it.reach }
         if (own != null) return own.takeIf { it.enabled }
         return rules.firstOrNull { it.pkg == DEFAULT_PKG && it.enabled }
     }
 
     fun put(rule: Rule) = update { c ->
-        if (c.rules.any { it.pkg == rule.pkg }) {
-            c.copy(rules = c.rules.map { if (it.pkg == rule.pkg) rule else it })
+        if (c.rules.any { it.id == rule.id }) {
+            c.copy(rules = c.rules.map { if (it.id == rule.id) rule else it })
         } else {
             c.copy(rules = c.rules + rule)
         }
     }
 
-    fun remove(pkg: String) = update { c -> c.copy(rules = c.rules.filterNot { it.pkg == pkg }) }
+    /** A new rule for part of [app]'s notifications, starting out with the app's own pattern. */
+    fun addScoped(app: Rule): Rule {
+        val rule = Rule(app.pkg, effect = app.effect, id = app.pkg + "/" + UUID.randomUUID())
+        put(rule)
+        return rule
+    }
+
+    /** Removes a rule; an app's own rule takes its narrower ones with it. */
+    fun remove(rule: Rule) = update { c ->
+        c.copy(rules = c.rules.filterNot { if (rule.scoped) it.id == rule.id else it.pkg == rule.pkg })
+    }
 
     fun setOnlyScreenOff(on: Boolean) = update { it.copy(onlyScreenOff = on) }
 
@@ -115,6 +183,12 @@ object RuleStore {
     fun setMusic(music: MusicConfig) = update { it.copy(music = music) }
 
     fun setTimer(timer: TimerConfig) = update { it.copy(timer = timer) }
+
+    fun setCall(call: CallConfig) = update { it.copy(call = call) }
+
+    fun setQuiet(quiet: QuietConfig) = update { it.copy(quiet = quiet) }
+
+    fun setRespectDnd(on: Boolean) = update { it.copy(respectDnd = on) }
 
     /** Everything the app has saved, as text for a backup file. */
     fun exportJson(): String = serialize(state.value).toString(2)
@@ -164,8 +238,23 @@ object RuleStore {
             .put("color", c.timer.color)
             .put("minutes", c.timer.minutes)
             .put("followClock", c.timer.followClock))
-        .put("rules", JSONArray(c.rules.map {
-            JSONObject().put("pkg", it.pkg).put("enabled", it.enabled).put("effect", it.effect.toJson())
+        .put("call", JSONObject()
+            .put("on", c.call.on)
+            .put("effect", c.call.effect.toJson()))
+        .put("quiet", JSONObject()
+            .put("on", c.quiet.on)
+            .put("startMinute", c.quiet.startMinute)
+            .put("endMinute", c.quiet.endMinute)
+            .put("dim", c.quiet.dim)
+            .put("calls", c.quiet.calls))
+        .put("respectDnd", c.respectDnd)
+        // putOpt leaves out what is null: all four, for an app's own rule.
+        .put("rules", JSONArray(c.rules.map { r ->
+            JSONObject().put("pkg", r.pkg).put("enabled", r.enabled).put("effect", r.effect.toJson())
+                .putOpt("channel", r.channel)
+                .putOpt("channelName", r.channelName)
+                .putOpt("title", r.title)
+                .putOpt("id", r.id.takeIf { r.scoped })
         }))
 
     private fun parse(o: JSONObject): Config {
@@ -173,13 +262,26 @@ object RuleStore {
         val ch = o.optJSONObject("charging") ?: JSONObject()
         val mu = o.optJSONObject("music") ?: JSONObject()
         val ti = o.optJSONObject("timer") ?: JSONObject()
+        val ca = o.optJSONObject("call") ?: JSONObject()
+        val qu = o.optJSONObject("quiet") ?: JSONObject()
+        val dc = CallConfig()
+        val dq = QuietConfig()
         val d = ChargingConfig()
         val dm = MusicConfig()
         val dt = TimerConfig()
         return Config(
             rules = (0 until arr.length()).map {
                 val r = arr.getJSONObject(it)
-                Rule(r.getString("pkg"), r.optBoolean("enabled", true), Effect.fromJson(r.getJSONObject("effect")))
+                val pkg = r.getString("pkg")
+                Rule(
+                    pkg = pkg,
+                    enabled = r.optBoolean("enabled", true),
+                    effect = Effect.fromJson(r.getJSONObject("effect")),
+                    channel = r.optString("channel").ifEmpty { null },
+                    channelName = r.optString("channelName").ifEmpty { null },
+                    title = r.optString("title").ifEmpty { null },
+                    id = r.optString("id").ifEmpty { pkg },
+                )
             },
             onlyScreenOff = o.optBoolean("onlyScreenOff", false),
             reminderMinutes = o.optInt("reminderMinutes", 0),
@@ -206,6 +308,18 @@ object RuleStore {
                 minutes = ti.optInt("minutes", dt.minutes),
                 followClock = ti.optBoolean("followClock", dt.followClock),
             ),
+            call = CallConfig(
+                on = ca.optBoolean("on", dc.on),
+                effect = ca.optJSONObject("effect")?.let(Effect::fromJson) ?: dc.effect,
+            ),
+            quiet = QuietConfig(
+                on = qu.optBoolean("on", dq.on),
+                startMinute = qu.optInt("startMinute", dq.startMinute).coerceIn(0, 1439),
+                endMinute = qu.optInt("endMinute", dq.endMinute).coerceIn(0, 1439),
+                dim = qu.optBoolean("dim", dq.dim),
+                calls = qu.optBoolean("calls", dq.calls),
+            ),
+            respectDnd = o.optBoolean("respectDnd", true),
         )
     }
 }

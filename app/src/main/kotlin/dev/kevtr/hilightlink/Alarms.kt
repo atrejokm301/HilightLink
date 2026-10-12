@@ -6,10 +6,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 
-/** Exact wake-ups, so reminders and the timer light keep working while the phone sleeps. */
+/** Exact wake-ups, so reminders, the timer light and quiet hours keep working while the phone sleeps. */
 object Alarms {
     const val REMIND = "dev.kevtr.hilightlink.REMIND"
     const val TIMER = "dev.kevtr.hilightlink.TIMER"
+    const val QUIET = "dev.kevtr.hilightlink.QUIET"
 
     /** One alarm per [action] and [slot]; setting it again moves it. [atElapsed] is elapsedRealtime. */
     fun set(context: Context, action: String, atElapsed: Long, slot: Int = 0) {
@@ -38,6 +39,7 @@ class AlarmReceiver : BroadcastReceiver() {
         when (intent.action) {
             Alarms.REMIND -> Reminders.fire(context)
             Alarms.TIMER -> TimerLight.tick(context, intent.getIntExtra(Alarms.EXTRA_SLOT, 0))
+            Alarms.QUIET -> Quiet.refresh(context)
         }
     }
 }
