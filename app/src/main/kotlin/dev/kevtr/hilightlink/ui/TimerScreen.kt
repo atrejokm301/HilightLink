@@ -18,7 +18,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -127,11 +126,7 @@ fun TimerScreen(onBack: () -> Unit) {
             Panel {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     QUICK_MINUTES.forEach { m ->
-                        FilterChip(
-                            selected = timer.minutes == m,
-                            onClick = { change(timer.copy(minutes = m)) },
-                            label = { Text(if (m == 60) "1 h" else "$m min") },
-                        )
+                        PillChip(if (m == 60) "1 h" else "$m min", selected = timer.minutes == m, onClick = { change(timer.copy(minutes = m)) })
                     }
                 }
                 SliderRow("Minutes", "${timer.minutes}", timer.minutes.toFloat(), 1f..120f) {

@@ -24,6 +24,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -193,7 +195,7 @@ fun GroupRow(
                 Spacer(Modifier.width(16.dp))
             }
             Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 2)
                 if (subtitle != null) {
                     Text(
                         subtitle,
@@ -227,6 +229,21 @@ fun Panel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> 
     Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = GroupShape, modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
     }
+}
+
+/** Pill-shaped choice that fills with the accent colour when picked. */
+@Composable
+fun PillChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label) },
+        shape = CircleShape,
+        colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.primary,
+            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+        ),
+    )
 }
 
 /** Slider with its name on the left and current value on the right. */

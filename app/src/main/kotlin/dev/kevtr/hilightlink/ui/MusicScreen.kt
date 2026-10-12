@@ -16,7 +16,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -122,11 +121,7 @@ fun MusicScreen(onBack: () -> Unit) {
             Panel {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MusicStyle.entries.forEach { style ->
-                        FilterChip(
-                            selected = music.style == style,
-                            onClick = { change(music.copy(style = style)) },
-                            label = { Text(style.label) },
-                        )
+                        PillChip(style.label, selected = music.style == style, onClick = { change(music.copy(style = style)) })
                     }
                 }
                 Text(
