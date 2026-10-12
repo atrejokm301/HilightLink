@@ -16,6 +16,8 @@ android {
         versionName = "1"
         // Only the languages the app and its dialogs are shown in.
         resourceConfigurations += listOf("en", "es")
+        // The Hilight LEDs only exist on 64-bit ARM Pixels.
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     buildTypes {
