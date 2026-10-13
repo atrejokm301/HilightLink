@@ -35,7 +35,9 @@ pattern and colours, and the LEDs play it whenever that app notifies you.
 
 ## Install
 
-1. Flash `HilightLink-module.zip` in your root manager. It installs the app too.
+1. Download `HilightLink-module.zip` from the
+   [latest release](https://github.com/atrejokm301/HilightLink/releases/latest) and flash it in
+   your root manager. It installs the app too.
 2. Reboot.
 3. Open Hilight Link and allow root for it in your root manager.
 4. Tap **Add app** and build your first pattern. **Test on phone** plays it on the LEDs.
@@ -48,6 +50,10 @@ Without the module you can install `HilightLink.apk` by itself. The app then sta
 through `su` when it needs it, and asks you to turn on notification access.
 
 To remove it, uninstall the module in your root manager and uninstall the app.
+
+If you have a build from before the first public release, it was signed with a different key
+and cannot be updated in place: save your rules with **Backup** in the app's settings,
+uninstall the app, install this one and restore the backup.
 
 ## Permissions
 
@@ -75,7 +81,7 @@ When more than one light wants the LEDs, the helper shows the first of these tha
 a ringing call, a timer that ran out or a low battery warning, a notification pattern, the
 timer countdown, the music visualizer, the glow of waiting notifications, the charging light.
 
-### Inside the system (optional, experimental)
+### Inside the system (optional)
 
 With an Xposed framework installed (Vector, LSPosed), switch Hilight Link on there for
 **System Framework** and reboot. The lights then run from inside the system process:
@@ -94,6 +100,9 @@ The engine is loaded from the installed APK and again after every update of the 
 update takes no reboot. To keep it from loading, run `setprop persist.sys.hilightlink.off 1`
 as root, or switch the app off in the Xposed framework, and reboot.
 
+This has been used on one Pixel 11 Pro with Vector on KernelSU. The root helper is still the
+default, and what the app falls back on whenever the engine is not there.
+
 ## Build
 
 Needs JDK 17, the Android SDK and Python.
@@ -105,3 +114,18 @@ Needs JDK 17, the Android SDK and Python.
 This writes `dist/HilightLink.apk` and `dist/HilightLink-module.zip`.
 
 `./gradlew :app:testDebugUnitTest` runs the tests.
+
+A release build is signed with the key named in `~/.gradle/gradle.properties`
+(`hilightlink.storeFile`, `hilightlink.storePassword`, `hilightlink.keyAlias`,
+`hilightlink.keyPassword`), and with the Android debug key when those are not set. A build
+signed with your own key cannot be installed over a released one, so uninstall that first.
+
+## Licence
+
+Hilight Link is free software under the [GNU General Public License, version 3](LICENSE).
+You may use, change and share it; if you share a changed build, its source has to be
+available under the same licence. It comes with no warranty.
+
+It is not affiliated with Google. Pixel and Hilight are Google's names for its own products.
+
+The app is built with AndroidX and Jetpack Compose, which are under the Apache License 2.0.

@@ -23,6 +23,11 @@ if pm install -r /data/local/tmp/HilightLink.apk >/dev/null 2>&1; then
     ui_print "- Notification access granted"
   cmd deviceidle whitelist +dev.kevtr.hilightlink >/dev/null 2>&1 &&
     ui_print "- Exempted from battery optimisation"
+elif pm path dev.kevtr.hilightlink >/dev/null 2>&1; then
+  # Builds from before the first public release were signed with another key.
+  ui_print "! An older Hilight Link is installed that this one cannot replace."
+  ui_print "! Save your rules with Backup in the app, uninstall the app, flash this"
+  ui_print "! again and restore the backup."
 else
   ui_print "! Could not install the app; install HilightLink.apk by hand"
 fi

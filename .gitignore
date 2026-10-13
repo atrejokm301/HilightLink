@@ -12,3 +12,6 @@ local.properties
 *.aab
 .kotlin/
 dist/
+
+# Notes that are not part of the project
+xda-post.txt

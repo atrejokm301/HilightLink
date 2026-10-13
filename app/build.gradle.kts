@@ -20,6 +20,21 @@ android {
         ndk { abiFilters += "arm64-v8a" }
     }
 
+    // The key releases are signed with stays out of the repository. Name it in
+    // ~/.gradle/gradle.properties (hilightlink.storeFile, .storePassword, .keyAlias,
+    // .keyPassword); without those a release build is signed with the debug key instead.
+    val releaseStore = providers.gradleProperty("hilightlink.storeFile").orNull
+    signingConfigs {
+        if (releaseStore != null) {
+            create("release") {
+                storeFile = file(releaseStore)
+                storePassword = providers.gradleProperty("hilightlink.storePassword").get()
+                keyAlias = providers.gradleProperty("hilightlink.keyAlias").get()
+                keyPassword = providers.gradleProperty("hilightlink.keyPassword").get()
+            }
+        }
+    }
+
     buildTypes {
         release {
             // R8 full mode: whole-program optimisation, shrinking and renaming.
@@ -28,8 +43,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Same key as debug builds so it installs over them without wiping rules.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (releaseStore != null) "release" else "debug")
         }
         debug { isMinifyEnabled = false }
         // Release without renaming, used only to record which code runs on a real phone
